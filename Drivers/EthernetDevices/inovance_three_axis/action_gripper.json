@@ -1,0 +1,43 @@
+{
+    "create_flow": [
+        {
+            "name": "夹爪动作",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_gripper_cmd_true",
+                            "node_name": "{{cmd}}",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_gripper_cmd_status",
+                            "node_name": "{{status}}",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_write_gripper_cmd",
+                        "write_functions": ["write_gripper_cmd_true"],
+                        "condition_functions": ["read_gripper_cmd_status"],
+                        "stop_condition_expression": "read_gripper_cmd_status[0]"
+                    },
+                    "create_stop_function":
+                    {
+                          "func_name": "write_gripper_cmd_false",
+                          "node_name": "{{cmd}}",
+                          "mode": "write",
+                          "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+        }
+    ],
+    "execute_flow": [
+        "夹爪动作"
+    ]
+}

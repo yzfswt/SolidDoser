@@ -1,0 +1,62 @@
+{
+    "create_flow": [
+        {
+            "name": "读设备自动模式命令",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "read_auto_status",
+                            "node_name": "COIL_SYS_AUTO_STATUS",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_check_auto_status",
+                        "write_functions": null,
+                        "condition_functions": ["read_auto_status"],
+                        "stop_condition_expression": "read_auto_status[0]"
+                    },
+                    "create_stop_function": null,
+                    "create_cleanup_function": null
+                }
+            ]
+        },
+        {
+            "name": "设备停止",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_stop_cmd",
+                            "node_name": "COIL_SYS_STOP_CMD",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_stop_cmd",
+                            "node_name": "COIL_SYS_STOP_STATUS",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_device_stop",
+                        "write_functions": ["write_stop_cmd"],
+                        "condition_functions": ["read_stop_cmd"],
+                        "stop_condition_expression": "read_stop_cmd[0]"
+                    },
+                    "create_stop_function": null,
+                    "create_cleanup_function": null
+                }
+            ]
+        }
+    ],
+    "execute_flow": [
+        "读设备自动模式命令",
+        "设备停止"
+    ]
+}

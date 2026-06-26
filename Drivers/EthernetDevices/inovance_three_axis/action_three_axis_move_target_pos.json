@@ -1,0 +1,117 @@
+{
+    "create_flow": [
+        {
+            "name": "轴X运动至目标点",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_axis_x_move_cmd_true",
+                            "node_name": "{{pos_x_cmd}}",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_axis_x_move_status",
+                            "node_name": "{{pos_x_status}}",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_axis_x_move",
+                        "write_functions": ["write_axis_x_move_cmd_true"],
+                        "condition_functions": ["read_axis_x_move_status"],
+                        "stop_condition_expression": "read_axis_x_move_status[0]"
+                    },
+                    "create_stop_function":
+                    {
+                          "func_name": "write_axis_x_move_cmd_false",
+                          "node_name": "{{pos_x_cmd}}",
+                          "mode": "write",
+                          "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+        },
+        {
+            "name": "轴Y运动至目标点",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_axis_y_move_cmd_true",
+                            "node_name": "{{pos_y_cmd}}",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_axis_y_move_status",
+                            "node_name": "{{pos_y_status}}",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_axis_y_run",
+                        "write_functions": ["write_axis_y_move_cmd_true"],
+                        "condition_functions": ["read_axis_y_move_status"],
+                        "stop_condition_expression": "read_axis_y_move_status[0]"
+                    },
+                    "create_stop_function":
+                    {
+                          "func_name": "write_axis_y_move_cmd_false",
+                          "node_name": "{{pos_y_cmd}}",
+                          "mode": "write",
+                          "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+        },
+        {
+            "name": "轴Z运动至目标点",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_axis_z_move_cmd_true",
+                            "node_name": "{{pos_z_cmd}}",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_axis_z_move_status",
+                            "node_name": "{{pos_z_status}}",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_axis_z_move",
+                        "write_functions": ["write_axis_z_move_cmd_true"],
+                        "condition_functions": ["read_axis_z_move_status"],
+                        "stop_condition_expression": "read_axis_z_move_status[0]"
+                    },
+                    "create_stop_function":
+                    {
+                          "func_name": "write_axis_z_move_cmd_false",
+                          "node_name": "{{pos_z_cmd}}",
+                          "mode": "write",
+                          "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+      }
+    ],
+    "execute_flow": [
+        "轴X运动至目标点",
+        "轴Y运动至目标点",
+        "轴Z运动至目标点"
+    ]
+}

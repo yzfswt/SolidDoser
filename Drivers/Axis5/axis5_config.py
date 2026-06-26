@@ -1,0 +1,74 @@
+"""第五轴配置：汇川 Easy521-0808TN + SV630 EtherCAT 伺服。
+
+
+
+通讯：Modbus TCP 从站（编程手册 9.3.3），线圈=M、保持寄存器=D。
+
+PLC 程序与点表见 Dependencies/Easy521-0808TN/FTIR_AXIS5_PLC_INTERFACE.md
+
+"""
+
+from __future__ import annotations
+
+
+
+AXIS5_USE_SIMULATION = False
+
+
+
+PLC_HOST = "192.168.0.4"
+
+PLC_PORT = 502
+
+MODBUS_SLAVE_ID = 1
+
+
+
+# PLC 中 EtherCAT 伺服轴号（与 AutoShop 轴配置一致）
+
+AXIS_INDEX = 0
+
+
+
+AXIS5_MIN_MM = 0.0
+
+AXIS5_MAX_MM = 2000.0
+
+AXIS5_DEFAULT_VELOCITY_MM_S = 50.0
+
+AXIS5_COMMAND_TIMEOUT_S = 120.0
+
+AXIS5_POLL_INTERVAL_S = 0.2
+
+
+
+# Modbus 地址 = M/D 编号（Easy521 Modbus TCP 从站映射）
+
+M_CMD_POWER = 100
+
+M_STATUS_POWER_OK = 102
+
+M_CMD_HOME = 110
+
+M_STATUS_HOME_DONE = 120
+
+M_CMD_MOVE_ABS = 112
+
+M_STATUS_MOVE_DONE = 121
+
+M_CMD_STOP = 113
+
+M_STATUS_HOMED = 122
+
+M_STATUS_MOVING = 123
+
+M_STATUS_ALARM = 124
+
+
+
+D_TARGET_MM = 200
+
+D_VELOCITY_MM_S = 202
+
+D_ACTUAL_MM = 204
+

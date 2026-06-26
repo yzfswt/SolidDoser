@@ -1,0 +1,94 @@
+"""MCEA-3G-01-030-C-W-F 电缸配置（Modbus-RTU 0x1600，经 ZLAN5212DI RS485）。"""
+
+from __future__ import annotations
+
+
+
+# True：无 SDK 时仿真
+
+PGC_USE_SIMULATION = False
+
+
+
+MODBUS_SLAVE_ID = 2
+
+# 0x0100 段（调试软件「行程初始化」，与 PGE/电爪 0xA5 标定相同）
+PGC_REG_LEGACY_CMD = 0x0100
+PGC_REG_LEGACY_STATUS = 0x0200
+PGC_CMD_STROKE_INIT = 0xA5
+PGC_STROKE_INIT_TIMEOUT_S = 90.0
+
+# 电缸运动中轮询间隔（兼顾 485 忙与界面响应）
+PGC_MOTION_POLL_INTERVAL_S = 0.1
+
+# 0x160C~0x1611 一次读回：位置、报警码、状态字
+PGC_STATUS_BLOCK_REGS = 6
+
+
+
+# 型号 030 → 行程 30 mm → 3000（单位 0.01 mm）
+
+PGC_MAX_STROKE_001MM = 3000
+
+
+
+# 伸出默认（与调试软件一致：目标位置 / 推压段 / 推力 独立）
+
+PGC_EXTEND_TARGET_001MM = 3000
+
+PGC_EXTEND_PUSH_SEGMENT_001MM = 0
+
+PGC_EXTEND_THRUST_PERCENT = 50
+
+# 速度单位 0.01 mm/s；300.00 mm/s
+
+PGC_EXTEND_SPEED_001MM_S = 30000
+
+PGC_EXTEND_ACCEL_PERCENT = 50
+
+
+
+# 缩回（绝对位置模式）默认：推压段=0，目标=0
+
+PGC_RETRACT_TARGET_001MM = 0
+
+PGC_RETRACT_SPEED_001MM_S = 30000
+
+PGC_RETRACT_ACCEL_PERCENT = 50
+
+
+
+PGC_COMMAND_TIMEOUT_S = 120.0
+
+PGC_POLL_INTERVAL_S = 0.05
+
+PGC_HOME_TIMEOUT_S = 30.0
+
+# 发出回零指令后，须在此时间内看到运动或回零位变化
+PGC_HOME_MOTION_START_TIMEOUT_S = 3.0
+
+# 回零前使能位稳定时间（过长会导致点击后迟迟不动）
+PGC_HOME_PREP_DELAY_S = 0.05
+
+PGC_ENABLE_TIMEOUT_S = 5.0
+
+PGC_ENABLE_POLL_INTERVAL_S = 0.1
+
+PGC_ALARM_CLEAR_TIMEOUT_S = 3.0
+
+
+
+# 0x1605 控制字（MCEA 手册 2.4 节）
+
+PGC_CTRL_DISABLE = 0x0000
+
+PGC_CTRL_ENABLE = 0x0020          # Bit5 使能
+
+PGC_CTRL_HOME = 0x0022            # Bit5 + Bit1 回零
+
+PGC_CTRL_CLEAR_ALARM = 0x0030     # Bit5 + Bit4 清除报警
+
+PGC_CTRL_ABS_POS = 0x0021         # Bit5 + Bit0 绝对定位触发
+
+PGC_CTRL_ABS_PUSH = 0x1021        # Bit5 + Bit0 + Bit12 绝对推压
+

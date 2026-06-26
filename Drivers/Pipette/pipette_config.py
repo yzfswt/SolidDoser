@@ -1,0 +1,29 @@
+"""ST5000P 移液枪驱动配置（经 ZLAN5212DI 串口服务器 RS485 透传）。"""
+
+from __future__ import annotations
+
+
+
+# True：无串口服务器连接时仅仿真
+
+PIPETTE_USE_SIMULATION = False
+
+
+
+# ST5000P RS485（见说明书附录 D）
+
+PIPETTE_DEVICE_ADDRESS = 3
+
+
+
+# 取液/排液运动参数（与现场整理协议一致）
+
+PIPETTE_ASPIRATE_PROFILE = "a30000b200c200s2000"
+
+PIPETTE_DISPENSE_PROFILE = "a300000b500c500s6000"
+
+
+
+PIPETTE_COMMAND_TIMEOUT_S = 120.0
+
+PIPETTE_POLL_INTERVAL_S = 0.1

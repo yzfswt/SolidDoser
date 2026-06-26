@@ -1,0 +1,152 @@
+{
+    "create_flow": [
+        {
+            "name": "设备切手动模式",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_hand_cmd_true",
+                            "node_name": "COIL_SYS_HAND_CMD",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_hand_cmd",
+                            "node_name": "COIL_SYS_HAND_STATUS",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_device_hand",
+                        "write_functions": ["write_hand_cmd_true"],
+                        "condition_functions": ["read_hand_cmd"],
+                        "stop_condition_expression": "read_hand_cmd[0]"
+                    },
+                    "create_stop_function":
+                    {
+                            "func_name": "write_hand_cmd_false",
+                            "node_name": "COIL_SYS_HAND_CMD",
+                            "mode": "write",
+                            "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+        },
+        {
+            "name": "设备初始化",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_init_cmd_true",
+                            "node_name": "COIL_SYS_INIT_CMD",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_init_cmd",
+                            "node_name": "COIL_SYS_INIT_STATUS",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_device_init",
+                        "write_functions": ["write_init_cmd_true"],
+                        "condition_functions": ["read_init_cmd"],
+                        "stop_condition_expression": "read_init_cmd[0]"
+                    },
+                    "create_stop_function":
+                   {
+                            "func_name": "write_init_cmd_false",
+                            "node_name": "COIL_SYS_INIT_CMD",
+                            "mode": "write",
+                            "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+      },
+        {
+            "name": "设备切自动模式",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_auto_cmd_true",
+                            "node_name": "COIL_SYS_AUTO_CMD",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_auto_cmd",
+                            "node_name": "COIL_SYS_AUTO_STATUS",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_device_auto",
+                        "write_functions": ["write_auto_cmd_true"],
+                        "condition_functions": ["read_auto_cmd"],
+                        "stop_condition_expression": "read_auto_cmd[0]"
+                    },
+                    "create_stop_function":
+                    {
+                            "func_name": "write_auto_cmd_false",
+                            "node_name": "COIL_SYS_AUTO_CMD",
+                            "mode": "write",
+                            "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+      },
+        {
+            "name": "设备启动",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_start_cmd_true",
+                            "node_name": "COIL_SYS_START_CMD",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_start_cmd",
+                            "node_name": "COIL_SYS_START_STATUS",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_device_start",
+                        "write_functions": ["write_start_cmd_true"],
+                        "condition_functions": ["read_start_cmd"],
+                        "stop_condition_expression": "read_start_cmd[0]"
+                    },
+                    "create_stop_function":
+                    {
+                            "func_name": "write_start_cmd_false",
+                            "node_name": "COIL_SYS_START_CMD",
+                            "mode": "write",
+                            "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+      }
+    ],
+    "execute_flow": [
+        "设备切手动模式",
+        "设备初始化"
+    ]
+}

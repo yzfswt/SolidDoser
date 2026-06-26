@@ -1,0 +1,43 @@
+{
+    "create_flow": [
+        {
+            "name": "轴Y运动至原点",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_axis_y_home_pos_cmd_true",
+                            "node_name": "COIL_AXIS_Y_HOME_POS_CMD",
+                            "mode": "write",
+                            "value": true
+                        },
+                        {
+                            "func_name": "read_axis_y_home_pos_status",
+                            "node_name": "COIL_AXIS_Y_HOME_POS_STATUS",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_axis_y_home_pos",
+                        "write_functions": ["write_axis_y_home_pos_cmd_true"],
+                        "condition_functions": ["read_axis_y_home_pos_status"],
+                        "stop_condition_expression": "read_axis_y_home_pos_status[0]"
+                    },
+                    "create_stop_function":
+                    {
+                          "func_name": "write_axis_y_home_pos_cmd_false",
+                          "node_name": "COIL_AXIS_Y_HOME_POS_CMD",
+                          "mode": "write",
+                          "value": false
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+        }
+    ],
+    "execute_flow": [
+        "轴Y运动至原点"
+    ]
+}

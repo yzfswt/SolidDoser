@@ -1,0 +1,62 @@
+{
+    "create_flow": [
+        {
+            "name": "读设备请求接收配方",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "read_request_rec_msg_status",
+                            "node_name": "COIL_REQUEST_REC_MSG_STATUS",
+                            "mode": "read",
+                            "value": 1
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_check_request_rec_msg_status",
+                        "write_functions": null,
+                        "condition_functions": ["read_request_rec_msg_status"],
+                        "stop_condition_expression": "read_request_rec_msg_status[0]"
+                    },
+                    "create_stop_function": null,
+                    "create_cleanup_function": null
+                }
+            ]
+        },
+        {
+            "name": "参数下发",
+            "action": [
+                {
+                    "address_function_to_create": [
+                        {
+                            "func_name": "write_msg_elec_num",
+                            "node_name": "REG_MSG_ELECTROLYTE_NUM",
+                            "mode": "write",
+                            "value": "{{elec_num}}"
+                        }
+                    ],
+                    "create_init_function":null,
+                    "create_start_function": {
+                        "func_name": "func_device_write_exper_param",
+                        "write_functions": ["write_msg_elec_num"],
+                        "condition_functions": null,
+                        "stop_condition_expression": null
+                    },
+                    "create_stop_function":
+                    {
+                            "func_name": "write_send_msg_succ",
+                            "node_name": "COIL_UNILAB_SEND_MSG_SUCC_CMD",
+                            "mode": "write",
+                            "value": true
+                    },
+                    "create_cleanup_function": null
+                }
+            ]
+        }
+    ],
+    "execute_flow": [
+        "读设备请求接收配方",
+        "参数下发"
+    ]
+}
