@@ -1,0 +1,164 @@
+{
+  "device": "SR-X100WP",
+  "vendor": "KEYENCE 基恩士",
+  "series": "SR-X",
+  "note": "基恩士中国站下载资料需注册/登录（手机号验证）。以下为官方直链，浏览器打开后登录即可下载。",
+  "product_pages": {
+    "model_page": "https://www.keyence.com.cn/products/barcode/barcode-readers/sr-x/models/sr-x100wp/",
+    "series_page": "https://www.keyence.com.cn/products/barcode/barcode-readers/sr-x/",
+    "support_portal": "https://www.keyence.com.cn/support/user/barcode/sr-x/",
+    "manuals": "https://www.keyence.com.cn/support/user/barcode/sr-x/manual/",
+    "software": "https://www.keyence.com.cn/support/user/barcode/sr-x/software/",
+    "communication": "https://www.keyence.com.cn/support/user/barcode/sr-x/communication/",
+    "pc_program": "https://www.keyence.com.cn/support/user/barcode/sr-x/program/"
+  },
+  "downloads": {
+    "datasheet": [
+      {
+        "name": "SR-X100WP 技术规格(PDF)",
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlSeriesId=WS_157136&dlModelId=PM_193X1WP&dlSiteId=21&dlLanguageId=zh-CN&dlLangType=zh-CN"
+      }
+    ],
+    "manual": [
+      {
+        "asset_id": "AS_145267",
+        "name": "SR-X 系列 使用说明书",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_145267"
+      },
+      {
+        "asset_id": "AS_162859",
+        "name": "SR-X 系列 用户手册",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_162859"
+      },
+      {
+        "asset_id": "AS_124968",
+        "name": "SR-X 系列 脚本参考",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_124968"
+      },
+      {
+        "asset_id": "AS_148701",
+        "name": "SR-X 系列 AI 智能条码读取器 产品目录",
+        "type": "Catalog",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_148701"
+      }
+    ],
+    "software": [
+      {
+        "asset_id": "AS_70250",
+        "name": "AutoID Terminal 用户手册",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_70250"
+      },
+      {
+        "asset_id": "AS_147352",
+        "name": "AutoID Keyboard Wedge 用户手册",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_147352"
+      }
+    ],
+    "communication": [
+      {
+        "asset_id": "AS_126141",
+        "name": "SR-X300/X100/5000/2000/1000 系列 SIEMENS S7-1500/1200/300 SERIES 连接指南: PROFINET 通信篇",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126141"
+      },
+      {
+        "asset_id": "AS_126133",
+        "name": "SR-X300/X100/5000/2000/1000 系列 MITSUBISHI iQ-F FX5 SERIES 以太网PLC-LINK 连接指南 CPU 单元内置网口篇",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126133"
+      },
+      {
+        "asset_id": "AS_126121",
+        "name": "SR-X300/X100/5000/2000/1000 系列 MITSUBISHI Q SERIES 连接指南: RS-232C 无协议通信",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126121"
+      },
+      {
+        "asset_id": "AS_126113",
+        "name": "SR-X300/X100/5000/2000/1000 系列 MITSUBISHI Q SERIES 连接指南: TCP/IP 通信协议 QJ71E71-100 端口篇",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126113"
+      },
+      {
+        "asset_id": "AS_126109",
+        "name": "SR-X300/X100/5000/2000/1000 系列 MITSUBISHI Q SERIES PLC-LINK 连接指南 CPU 单元内置网口篇",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126109"
+      },
+      {
+        "asset_id": "AS_126125",
+        "name": "SR-X300/X100/5000/2000/1000 系列 MITSUBISHI Q SERIES 连接指南 RS-232 PLC-LINK 通信指南",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126125"
+      },
+      {
+        "asset_id": "AS_126129",
+        "name": "SR-X300/X100/5000/2000/1000 系列 MITSUBISHI iQ-R SERIES 以太网PLC-LINK 连接指南 CPU 单元内置网口篇",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126129"
+      },
+      {
+        "asset_id": "AS_134954",
+        "name": "KV 系列 × SR/BL 系列 EtherNet/IP™ 连接指南",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_134954"
+      },
+      {
+        "asset_id": "AS_126117",
+        "name": "SR-X300/X100/5000/2000/1000 系列 MITSUBISHI Q SERIES PLC-LINK 连接指南 通信模块“QJ71E71-100” 篇",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126117"
+      },
+      {
+        "asset_id": "AS_126617",
+        "name": "SR-X300/X100/5000/2000/1000 × Rockwell CompactLogix 连接指南：EtherNet/IP™ 通信篇",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126617"
+      },
+      {
+        "asset_id": "AS_126137",
+        "name": "SR-X300/X100/5000/2000/1000 系列 OMRON CJ-2 SERIES 连接指南 EtherNet/IP™ 通信",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_126137"
+      },
+      {
+        "asset_id": "AS_151161",
+        "name": "SR-X300/X100/5000/2000/1000 系列 MITSUBISHI iQ-R SERIES 连接指南 EtherNet/IP™ 通信 RJ71EIP91",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_151161"
+      }
+    ],
+    "program": [
+      {
+        "asset_id": "AS_124924",
+        "name": "SR SDK 使用说明书 支持 .Net Framework 4.6.1",
+        "type": "Manual",
+        "version": null,
+        "url": "https://www.keyence.com.cn/download/download/confirmation/?dlAssetId=AS_124924"
+      }
+    ]
+  }
+}
