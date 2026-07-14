@@ -1,10 +1,12 @@
 from enum import IntEnum
-ZMOTION_ADDRESS = "192.168.1.11" # ZMOTION运动卡的IP地址
-SRND_IO_ADDRESS = "192.168.1.8:23" # SRND-16IO的IP地址和端口
-SRND_IO_ADDRESS_2 = "192.168.1.9:25" #反应器部分用的板卡，用于控制1-8号反应器的氮气通断以及6个定量泵
-SRND_IO_SLAVE_ID = 1 # SRND-16IO的Modbus从站ID
-PLC_ADDRESS = "192.168.0.4" # PLC的IP地址
-PLC_PORT = "502" # PLC的Modbus端口
+
+# SolidDoser 使用 AM600-CPU1608TN，通讯参数见 Common/PlcConfig.py
+from Common.PlcConfig import PLC_ADDRESS, PLC_PORT_STR as PLC_PORT
+
+ZMOTION_ADDRESS = "192.168.1.11"  # 遗留配置，SolidDoser 主程序未使用
+SRND_IO_ADDRESS = "192.168.1.8:23"
+SRND_IO_ADDRESS_2 = "192.168.1.9:25"
+SRND_IO_SLAVE_ID = 1
 
 class Bottle(IntEnum):
     Reaction = 3

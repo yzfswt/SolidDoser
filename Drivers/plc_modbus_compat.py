@@ -1,4 +1,8 @@
-"""pymodbus 2.x(slave) / 3.x(device_id) 兼容封装（Easy521 Modbus TCP）。"""
+"""pymodbus 2.x(slave) / 3.x(device_id) 兼容封装。
+
+SolidDoser 使用汇川 AM600-CPU1608TN Modbus TCP 从站（非 FTIR 原 Easy521）。
+线圈对应 M 区、保持寄存器对应 D 区，具体编号以 AutoShop 点表为准。
+"""
 from __future__ import annotations
 
 from typing import Any

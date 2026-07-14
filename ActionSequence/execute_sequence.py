@@ -14,11 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 导入数据库管理模块
 from DateBaseManager.database_manager import save_process_file, get_active_process_file
 
-from BusinessActions.MultiStepActions.MultiStepActionManager import *
-from BusinessActions.SingleStepActions.AxisSingleStepAction import *
-from BusinessActions.SingleStepActions.MotorAction import *
-from BusinessActions.SingleStepActions.TemperatureControlAction import *
-from BusinessActions.SingleStepActions.ValveAction import *
+from BusinessActions.SingleStepActions.MotorAction import Wait
 from BusinessActions.DeviceManager import DeviceManager
 from UIInteraction.ParameterManagement.ParameterStorage import ParameterStorage
 from Common.ActionLogger import get_action_logger
@@ -31,21 +27,7 @@ from Common.ActionLogger import get_action_logger
 # ------------------------------
 # 关键：TXT中的命令名必须和字典的key完全一致
 command_to_func = {
-    "REACTOR_SOLUTION_ADD": Add_Solution_to_Reactor,
-    "REACTOR_SOLUTION_ADD_MUTI": Add_Solution_to_Reactor_Array,
-    "POST_PROCESS_SOLUTION_ADD": Solution_transfer_Post,
-    "POST_PROCESS_CLEAN": Auto_CleanProgram,
-    "REACTOR_N2_ON": Reactor_N2_on,
-    "REACTOR_N2_OFF":Reactor_N2_off ,
-    "REACTOR_AIR_ON": Reactor_Air_on,
-    "REACTOR_AIR_OFF": Reactor_Air_off,
-    "TEMP_SET": Temp_set,
-    "START_STIR": Start_Reactor_Stirrer,
-    "STOP_STIR": Stop_Reactor_Stirrer,
-    "POST_PROCESS_Discharge_On": Post_Process_Discharge_On,
-    "POST_PROCESS_Discharge_Off": Post_Process_Discharge_Off,
-    "WAIT": Wait
-    
+    "WAIT": Wait,
 }
 
 # ------------------------------
@@ -213,55 +195,10 @@ def process_parameters_by_function(sequence, device_manager):
                     # 转换失败则保持原字符串
                     pass
 
-        # REACTOR_SOLUTION_ADD_MUTI:
-        # 文本参数格式：solution_number, volume_1, reactor_1, volume_2, reactor_2, ...
-        # 函数参数格式：device_manager, solution_number, [volumes], [reactors]
-        if func_name == "Add_Solution_to_Reactor_Array":
-            if len(processed_args) < 3:
-                print(f"⚠️  参数数量不足，跳过：{func_name} -> {processed_args}")
-                continue
-            if (len(processed_args) - 1) % 2 != 0:
-                print(f"⚠️  参数格式错误（应为 solution + n组[volume, reactor]），跳过：{processed_args}")
-                continue
-
-            solution_number = processed_args[0]
-            volumes = []
-            reactors = []
-
-            for i in range(1, len(processed_args), 2):
-                volumes.append(processed_args[i])
-                reactors.append(processed_args[i + 1])
-
-            processed_args = [device_manager, solution_number, volumes, reactors]
-            processed_sequence.append((func, processed_args))
-            continue
-
         # 除了Wait函数外，其他函数都将device_manager添加到第一个参数位置
         if func_name.upper() != "WAIT":
             # 将device_manager添加到参数列表的第一个位置
             processed_args.insert(0, device_manager)
-        # 其他参数处理逻辑可以在这里继续添加
-        if func_name == "Temp_set":
-            # TODO: Temp_set函数的额外参数处理逻辑
-            pass
-        elif func_name == "Start_Reactor_Stirrer":
-            # TODO: Start_Reactor_Stirrer函数的额外参数处理逻辑
-            pass
-        elif func_name == "Add_Solution_to_Reactor":
-            # TODO: Add_Solution_to_Reactor函数的额外参数处理逻辑
-            pass
-        elif func_name == "Solution_transfer_Post":
-            # TODO: Solution_transfer_Post函数的额外参数处理逻辑
-            pass
-        elif func_name == "Auto_CleanProgram":
-            # TODO: Auto_CleanProgram函数的额外参数处理逻辑
-            pass
-        elif func_name == "Post_Process_Discharge_On":
-            # TODO: Post_Process_Discharge_On函数的额外参数处理逻辑
-            pass
-        elif func_name == "Post_Process_Discharge_Off":
-            # TODO: Post_Process_Discharge_Off函数的额外参数处理逻辑
-            pass
         elif func_name == "Wait":
             # Wait函数不添加device_manager参数
             pass
@@ -290,32 +227,11 @@ def execute_sequence(sequence):
         print(f"\n【第{idx}/{len(sequence)}个命令】")
         print(f"命令名：{func.__name__}")
         print(f"参数：{args}")
-        module_number = None
-        is_post_clean = func.__name__ == "Auto_CleanProgram"
-        if is_post_clean:
-            for arg in args:
-                if isinstance(arg, int):
-                    module_number = arg
-                    break
-            module_token = module_number if module_number is not None else "unknown"
-            logger.record(
-                f"后处理 流程=自动清洁 模块={module_token} 动作=自动清洁程序 状态=开始 来源=工艺序列"
-            )
         try:
-            func(*args)  # 解包参数并执行函数
+            func(*args)
             print("状态：执行成功")
-            if is_post_clean:
-                module_token = module_number if module_number is not None else "unknown"
-                logger.record(
-                    f"后处理 流程=自动清洁 模块={module_token} 动作=自动清洁程序 状态=完成 来源=工艺序列"
-                )
         except Exception as e:
             print(f"状态：执行失败 | 错误原因：{e}")
-            if is_post_clean:
-                module_token = module_number if module_number is not None else "unknown"
-                logger.record(
-                    f"后处理 流程=自动清洁 模块={module_token} 动作=自动清洁程序 状态=失败 来源=工艺序列 异常={e}"
-                )
     
     print("\n" + "="*60)
     print("🏁 命令序列执行结束")
@@ -567,125 +483,7 @@ def Import_Parament_UDP(message,device_manager:DeviceManager,send_response_func=
         param = None
         print(f"解析到命令: {cmd}, 无参数")
     
-    # 检查是否为GET_REACTOR_STATE消息（支持带参数和不带参数）
-    if cmd == "GET_REACTOR_STATE":
-        print("处理GET_REACTOR_STATE请求")
-        
-        reactor_state = {"status": "success"}
-        
-        if param:
-            # 提取反应器编号，如"reactor_1" -> 1
-            try:
-                reactor_num = int(param.split('_')[-1]) - 1  # 转换为0-based索引
-                if 0 <= reactor_num < len(parameter_storage.reactors):
-                    reactor = parameter_storage.reactors[reactor_num]
-                    # 只返回unilab查询的状态量
-                    reactor_state["reactor"] = {
-                        "reactor_id": reactor.reactor_id,
-                        "current_temperature": reactor.current_temperature,
-                        "target_temperature": reactor.arget_temperature,
-                        "stirring_status": reactor.stirring_status,
-                        "stirring_speed": reactor.stirring_speed,
-                        "n2_status": reactor.n2_status,
-                        "air_status": reactor.air_status,
-                        "status": reactor.status,
-                        "error_message": reactor.error_message
-                    }
-                    print(f"要发送的指定反应器({reactor_num + 1})状态响应: {reactor_state}")
-                else:
-                    reactor_state["status"] = "error"
-                    reactor_state["message"] = f"无效的反应器编号: {reactor_num + 1}"
-                    print(f"无效的反应器编号: {reactor_num + 1}")
-            except (ValueError, IndexError) as e:
-                reactor_state["status"] = "error"
-                reactor_state["message"] = f"参数解析错误: {e}"
-                print(f"参数解析错误: {e}")
-        else:
-            # 如果没有参数，只返回当前选中反应器的信息（unilab查询的状态量）
-            reactor = parameter_storage.reactor
-            reactor_state["reactor"] = {
-                "reactor_id": reactor.reactor_id,
-                "current_temperature": reactor.current_temperature,
-                "target_temperature": reactor.arget_temperature,
-                "stirring_status": reactor.stirring_status,
-                "stirring_speed": reactor.stirring_speed,
-                "n2_status": reactor.n2_status,
-                "air_status": reactor.air_status,
-                "status": reactor.status,
-                "error_message": reactor.error_message
-            }
-            print(f"要发送的当前反应器状态响应: {reactor_state}")
-        
-        # 如果有响应发送函数，则发送响应
-        if send_response_func:
-            try:
-                # 直接发送字典对象，让send_udp_response函数负责JSON序列化
-                send_response_func(reactor_state)
-            except Exception as e:
-                print(f"发送反应器状态响应时出错: {e}")
-        return
-    
-    # 检查是否为GET_POST_PROCESS_STATE消息（支持带参数和不带参数）
-    elif cmd == "GET_POST_PROCESS_STATE":
-        print("处理GET_POST_PROCESS_STATE请求")
-        
-        post_process_state = {"status": "success"}
-        
-        if param:
-            # 提取模块编号，如"module_1" -> 1
-            try:
-                module_num = int(param.split('_')[-1]) - 1  # 转换为0-based索引
-                if 0 <= module_num < len(parameter_storage.posttreatmentmodules):
-                    module = parameter_storage.posttreatmentmodules[module_num]
-                    # 只返回unilab查询的状态量
-                    post_process_state["module"] = {
-                        "post_process_id": module.post_process_id,
-                        "cleaning_status": module.cleaning_status,
-                        "discharge_status": module.discharge_status,
-                        "transferring_status": module.transferring_status,
-                        "start_bottle": module.start_bottle,
-                        "end_bottle": module.end_bottle,
-                        "current_volume": module.current_volume,
-                        "target_volume": module.target_volume,
-                        "status": module.status,
-                        "error_message": module.error_message
-                    }
-                    print(f"要发送的指定后处理模块({module_num + 1})状态响应: {post_process_state}")
-                else:
-                    post_process_state["status"] = "error"
-                    post_process_state["message"] = f"无效的模块编号: {module_num + 1}"
-                    print(f"无效的模块编号: {module_num + 1}")
-            except (ValueError, IndexError) as e:
-                post_process_state["status"] = "error"
-                post_process_state["message"] = f"参数解析错误: {e}"
-                print(f"参数解析错误: {e}")
-        else:
-            # 如果没有参数，只返回当前选中模块的信息（unilab查询的状态量）
-            module = parameter_storage.posttreatmentmodule
-            post_process_state["module"] = {
-                "post_process_id": module.post_process_id,
-                "cleaning_status": module.cleaning_status,
-                "discharge_status": module.discharge_status,
-                "transferring_status": module.transferring_status,
-                "start_bottle": module.start_bottle,
-                "end_bottle": module.end_bottle,
-                "current_volume": module.current_volume,
-                "target_volume": module.target_volume,
-                "status": module.status,
-                "error_message": module.error_message
-            }
-            print(f"要发送的当前后处理模块状态响应: {post_process_state}")
-        
-        # 如果有响应发送函数，则发送响应
-        if send_response_func:
-            try:
-                # 直接发送字典对象，让send_udp_response函数负责JSON序列化
-                send_response_func(post_process_state)
-            except Exception as e:
-                print(f"发送后处理模块状态响应时出错: {e}")
-        return
-    
-    elif cmd == "GET_PROCESS_EXECUTION_STATE":
+    if cmd == "GET_PROCESS_EXECUTION_STATE":
         print("处理GET_PROCESS_EXECUTION_STATE请求")
         running = parameter_storage.process_execution_running
         state = {
