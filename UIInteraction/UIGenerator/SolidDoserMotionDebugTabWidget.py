@@ -1,4 +1,4 @@
-"""SolidDoser 设备调试界面（AM600 运动轴 + 基恩士扫码枪）。"""
+"""SolidDoser 设备调试界面（运动轴 / DO / 扫码枪 / 天平）。"""
 from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
@@ -7,7 +7,6 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -44,7 +43,7 @@ from Drivers.KeyenceScanner import scanner_config as scanner_cfg
 from Drivers.SartoriusBalance import balance_config as balance_cfg
 from Drivers.SerialServer import dw_rs20tm1_config as serial_cfg
 from Drivers.SolidDoserMotion import motion_config as motion_cfg
-from Drivers.SolidDoserMotion.motion_config import AxisMap
+from Drivers.SolidDoserMotion.motion_config import AxisMap, DoOutputMap
 from UIInteraction.ParameterManagement.ParameterStorage import ParameterStorage
 
 ActionFn = Callable[[SolidDoserMotionContext], Tuple[bool, str]]
@@ -53,70 +52,71 @@ BalanceActionFn = Callable[[BalanceContext], Tuple[bool, str]]
 
 _STYLESHEET = """
 SolidDoserMotionDebugTabWidget {
-    background: #f8fafc;
+    background: #f1f5f9;
 }
-QLabel#PageTitle {
-    font-size: 15px;
-    font-weight: 600;
-    color: #1e293b;
-}
-QLabel#PageHint {
-    font-size: 12px;
-    color: #64748b;
-}
-QLabel#StatusBar {
-    font-size: 12px;
-    color: #334155;
+QFrame#Card {
     background: #ffffff;
     border: 1px solid #e2e8f0;
     border-radius: 8px;
-    padding: 8px 12px;
 }
-QLabel#LogLine {
-    font-size: 12px;
-    color: #475569;
+QFrame#AxisRow {
     background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 6px 12px;
+    border: none;
+    border-bottom: 1px solid #f1f5f9;
 }
-QFrame#AxisPanel {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 10px;
-}
-QLabel#ColHeader {
-    font-size: 12px;
+QLabel#Title {
+    font-size: 14px;
     font-weight: 600;
-    color: #64748b;
-    padding: 4px 0;
+    color: #0f172a;
 }
-QLabel#AxisName {
+QLabel#Hint {
+    font-size: 11px;
+    color: #64748b;
+}
+QLabel#Field {
+    font-size: 11px;
+    color: #64748b;
+}
+QLabel#Name {
     font-size: 13px;
     font-weight: 600;
     color: #0f172a;
 }
-QLabel#AxisStatus {
+QLabel#Status {
     font-size: 11px;
     color: #475569;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+QLabel#Result {
+    font-size: 12px;
+    color: #334155;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 6px 8px;
 }
 QLineEdit {
     font-size: 12px;
-    padding: 4px 8px;
+    padding: 4px 6px;
     border: 1px solid #cbd5e1;
-    border-radius: 6px;
+    border-radius: 4px;
     background: #ffffff;
     min-height: 28px;
+    max-height: 28px;
 }
 QLineEdit:focus {
     border: 1px solid #3b82f6;
 }
 QPushButton {
     font-size: 12px;
-    padding: 4px 10px;
-    min-height: 28px;
+    padding: 4px 12px;
+    min-height: 30px;
+    max-height: 30px;
     border: 1px solid #cbd5e1;
-    border-radius: 6px;
+    border-radius: 5px;
     background: #ffffff;
     color: #334155;
 }
@@ -137,12 +137,12 @@ QPushButton#PrimaryBtn:hover {
     background: #1d4ed8;
 }
 QPushButton#DangerBtn {
-    background: #fef2f2;
-    border-color: #fecaca;
-    color: #b91c1c;
+    background: #fff1f2;
+    border-color: #fecdd3;
+    color: #be123c;
 }
 QPushButton#DangerBtn:hover {
-    background: #fee2e2;
+    background: #ffe4e6;
 }
 """
 
@@ -222,6 +222,17 @@ class _BalanceActionThread(QThread):
             self.finished.emit(False, str(e), self._action_name)
 
 
+def _make_btn(text: str, *, primary: bool = False, danger: bool = False) -> QPushButton:
+    btn = QPushButton(text)
+    if primary:
+        btn.setObjectName("PrimaryBtn")
+    elif danger:
+        btn.setObjectName("DangerBtn")
+    btn.setMinimumWidth(64)
+    btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    return btn
+
+
 class SolidDoserMotionDebugTabWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -257,282 +268,172 @@ class SolidDoserMotionDebugTabWidget(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
 
+        header = QHBoxLayout()
         title = QLabel("设备调试")
-        title.setObjectName("PageTitle")
-        root.addWidget(title)
-
+        title.setObjectName("Title")
+        header.addWidget(title)
         hint = QLabel(
-            f"AM600-CPU1608TN · Modbus TCP {motion_cfg.PLC_HOST}:{motion_cfg.PLC_PORT} · "
-            "写入 D 目标/速度，M 脉冲触发 PLC 运动"
+            f"PLC {motion_cfg.PLC_HOST}:{motion_cfg.PLC_PORT}  ·  "
+            f"扫码 {scanner_cfg.SCANNER_HOST}:{scanner_cfg.SCANNER_PORT}  ·  "
+            f"天平 {serial_cfg.SERIAL_SERVER_HOST}:{serial_cfg.SERIAL_SERVER_PORT}"
         )
-        hint.setObjectName("PageHint")
-        root.addWidget(hint)
-
-        top_row = QHBoxLayout()
-        self._status_label = QLabel("状态：未绑定")
-        self._status_label.setObjectName("StatusBar")
-        self._status_label.setWordWrap(True)
-        top_row.addWidget(self._status_label, 1)
-
-        btn_refresh = QPushButton("刷新")
-        btn_refresh.setObjectName("PrimaryBtn")
+        hint.setObjectName("Hint")
+        header.addWidget(hint, 1)
+        btn_refresh = _make_btn("刷新", primary=True)
         btn_refresh.setFixedWidth(72)
+        btn_refresh.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         btn_refresh.clicked.connect(
             lambda: self._run_global_action(motion_refresh_all, "刷新全部状态")
         )
         self._buttons.append(btn_refresh)
-        top_row.addWidget(btn_refresh)
-        root.addLayout(top_row)
+        header.addWidget(btn_refresh)
+        root.addLayout(header)
 
-        panel = QFrame()
-        panel.setObjectName("AxisPanel")
-        grid = QGridLayout(panel)
-        grid.setContentsMargins(12, 10, 12, 10)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(6)
+        self._status_label = QLabel("PLC：未绑定")
+        self._status_label.setObjectName("Status")
+        root.addWidget(self._status_label)
 
-        headers = ["电机", "目标", "速度", "状态", "操作"]
-        for col, text in enumerate(headers):
-            label = QLabel(text)
-            label.setObjectName("ColHeader")
-            grid.addWidget(label, 0, col)
+        root.addWidget(self._build_motion_card())
+        root.addWidget(self._build_do_card())
 
-        for row, axis in enumerate(motion_cfg.AXES, start=1):
-            self._add_axis_row(grid, row, axis)
-
-        grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(1, 2)
-        grid.setColumnStretch(2, 2)
-        grid.setColumnStretch(3, 4)
-        grid.setColumnStretch(4, 5)
-        root.addWidget(panel)
-
-        do_panel = QFrame()
-        do_panel.setObjectName("AxisPanel")
-        do_grid = QGridLayout(do_panel)
-        do_grid.setContentsMargins(12, 10, 12, 10)
-        do_grid.setHorizontalSpacing(10)
-        do_grid.setVerticalSpacing(6)
-        do_headers = ["设备", "输出点", "状态", "操作"]
-        for col, text in enumerate(do_headers):
-            label = QLabel(text)
-            label.setObjectName("ColHeader")
-            do_grid.addWidget(label, 0, col)
-        for row, do_item in enumerate(motion_cfg.DO_OUTPUTS, start=1):
-            self._add_do_row(do_grid, row, do_item)
-        do_grid.setColumnStretch(0, 2)
-        do_grid.setColumnStretch(1, 1)
-        do_grid.setColumnStretch(2, 2)
-        do_grid.setColumnStretch(3, 3)
-        root.addWidget(do_panel)
-
-        scanner_title = QLabel("扫码枪")
-        scanner_title.setObjectName("PageTitle")
-        root.addWidget(scanner_title)
-
-        scanner_hint = QLabel(
-            f"{scanner_cfg.SCANNER_MODEL} · TCP {scanner_cfg.SCANNER_HOST}:"
-            f"{scanner_cfg.SCANNER_PORT} · 发送 LON 触发单次读码"
-        )
-        scanner_hint.setObjectName("PageHint")
-        root.addWidget(scanner_hint)
-
-        scanner_panel = QFrame()
-        scanner_panel.setObjectName("AxisPanel")
-        scanner_layout = QVBoxLayout(scanner_panel)
-        scanner_layout.setContentsMargins(12, 10, 12, 10)
-        scanner_layout.setSpacing(8)
-
-        scanner_top = QHBoxLayout()
-        self._scanner_status_label = QLabel("状态：未测试")
-        self._scanner_status_label.setObjectName("StatusBar")
-        self._scanner_status_label.setWordWrap(True)
-        scanner_top.addWidget(self._scanner_status_label, 1)
-
-        btn_scanner_test = QPushButton("连接测试")
-        btn_scanner_test.clicked.connect(
-            lambda: self._run_scanner_action(scanner_test_connection, "扫码枪连接测试")
-        )
-        btn_scanner_trigger = QPushButton("触发扫码")
-        btn_scanner_trigger.setObjectName("PrimaryBtn")
-        btn_scanner_trigger.clicked.connect(
-            lambda: self._run_scanner_action(scanner_trigger_read, "触发扫码")
-        )
-        btn_scanner_clear = QPushButton("清空")
-        btn_scanner_clear.clicked.connect(
-            lambda: self._run_scanner_action(scanner_clear_result, "清空读码结果")
-        )
-        self._buttons.extend([btn_scanner_test, btn_scanner_trigger, btn_scanner_clear])
-        scanner_top.addWidget(btn_scanner_test)
-        scanner_top.addWidget(btn_scanner_trigger)
-        scanner_top.addWidget(btn_scanner_clear)
-        scanner_layout.addLayout(scanner_top)
-
-        self._scanner_result_label = QLabel("读码结果：—")
-        self._scanner_result_label.setObjectName("LogLine")
-        self._scanner_result_label.setWordWrap(True)
-        self._scanner_result_label.setMinimumHeight(40)
-        scanner_layout.addWidget(self._scanner_result_label)
-        root.addWidget(scanner_panel)
-
-        balance_title = QLabel("天平")
-        balance_title.setObjectName("PageTitle")
-        root.addWidget(balance_title)
-
-        balance_hint = QLabel(
-            f"{balance_cfg.BALANCE_MODEL} · {serial_cfg.SERIAL_SERVER_MODEL} "
-            f"TCP {serial_cfg.SERIAL_SERVER_HOST}:{serial_cfg.SERIAL_SERVER_PORT} "
-            f"RS232 透传 · SBI（Esc P/T/V）· 串口侧建议 {serial_cfg.SERIAL_PARAMS_HINT}"
-        )
-        balance_hint.setObjectName("PageHint")
-        balance_hint.setWordWrap(True)
-        root.addWidget(balance_hint)
-
-        balance_panel = QFrame()
-        balance_panel.setObjectName("AxisPanel")
-        balance_layout = QVBoxLayout(balance_panel)
-        balance_layout.setContentsMargins(12, 10, 12, 10)
-        balance_layout.setSpacing(8)
-
-        balance_top = QHBoxLayout()
-        self._balance_status_label = QLabel("状态：未测试")
-        self._balance_status_label.setObjectName("StatusBar")
-        self._balance_status_label.setWordWrap(True)
-        balance_top.addWidget(self._balance_status_label, 1)
-
-        btn_balance_test = QPushButton("连接测试")
-        btn_balance_test.clicked.connect(
-            lambda: self._run_balance_action(balance_test_connection, "天平连接测试")
-        )
-        btn_balance_read = QPushButton("读重量")
-        btn_balance_read.setObjectName("PrimaryBtn")
-        btn_balance_read.clicked.connect(
-            lambda: self._run_balance_action(balance_read_weight, "读取重量")
-        )
-        btn_balance_tare = QPushButton("去皮")
-        btn_balance_tare.clicked.connect(
-            lambda: self._run_balance_action(balance_tare, "去皮")
-        )
-        btn_balance_zero = QPushButton("清零")
-        btn_balance_zero.clicked.connect(
-            lambda: self._run_balance_action(balance_zero, "清零")
-        )
-        btn_balance_clear = QPushButton("清空")
-        btn_balance_clear.clicked.connect(
-            lambda: self._run_balance_action(balance_clear_result, "清空读重结果")
-        )
-        self._buttons.extend(
-            [
-                btn_balance_test,
-                btn_balance_read,
-                btn_balance_tare,
-                btn_balance_zero,
-                btn_balance_clear,
-            ]
-        )
-        balance_top.addWidget(btn_balance_test)
-        balance_top.addWidget(btn_balance_read)
-        balance_top.addWidget(btn_balance_tare)
-        balance_top.addWidget(btn_balance_zero)
-        balance_top.addWidget(btn_balance_clear)
-        balance_layout.addLayout(balance_top)
-
-        self._balance_result_label = QLabel("读重结果：—")
-        self._balance_result_label.setObjectName("LogLine")
-        self._balance_result_label.setWordWrap(True)
-        self._balance_result_label.setMinimumHeight(40)
-        balance_layout.addWidget(self._balance_result_label)
-        root.addWidget(balance_panel)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(8)
+        bottom.addWidget(self._build_scanner_card(), 1)
+        bottom.addWidget(self._build_balance_card(), 1)
+        root.addLayout(bottom)
 
         self._log_label = QLabel("日志：—")
-        self._log_label.setObjectName("LogLine")
-        self._log_label.setWordWrap(True)
+        self._log_label.setObjectName("Result")
         root.addWidget(self._log_label)
+        root.addStretch(1)
 
-    def _add_axis_row(self, grid: QGridLayout, row: int, axis: AxisMap) -> None:
+    def _build_motion_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(8, 8, 8, 4)
+        layout.setSpacing(0)
+
+        head = QLabel("运动轴（AM600）")
+        head.setObjectName("Title")
+        layout.addWidget(head)
+
+        for axis in motion_cfg.AXES:
+            layout.addWidget(self._build_axis_row(axis))
+        return card
+
+    def _build_axis_row(self, axis: AxisMap) -> QWidget:
+        row = QFrame()
+        row.setObjectName("AxisRow")
+        row.setMinimumHeight(44)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(4, 6, 4, 6)
+        layout.setSpacing(8)
+
         name = QLabel(axis.label)
-        name.setObjectName("AxisName")
-        grid.addWidget(name, row, 0)
+        name.setObjectName("Name")
+        name.setFixedWidth(72)
+        layout.addWidget(name)
 
-        pos_validator = QDoubleValidator(axis.pos_min, axis.pos_max, 3)
-        pos_validator.setNotation(QDoubleValidator.StandardNotation)
-        vel_validator = QDoubleValidator(0.1, 5000.0, 2)
-        vel_validator.setNotation(QDoubleValidator.StandardNotation)
-
-        target_input = QLineEdit()
-        target_input.setPlaceholderText(f"0 {axis.unit}")
-        target_input.setValidator(pos_validator)
-        target_input.editingFinished.connect(lambda k=axis.key: self._sync_axis_params(k))
-        self._target_inputs[axis.key] = target_input
-        grid.addWidget(target_input, row, 1)
-
-        vel_input = QLineEdit()
-        vel_input.setPlaceholderText(f"{axis.vel_default:g}")
-        vel_input.setValidator(vel_validator)
-        vel_input.editingFinished.connect(lambda k=axis.key: self._sync_axis_params(k))
-        self._velocity_inputs[axis.key] = vel_input
-        grid.addWidget(vel_input, row, 2)
-
-        status_label = QLabel("未读取")
-        status_label.setObjectName("AxisStatus")
-        status_label.setWordWrap(True)
-        self._axis_status_labels[axis.key] = status_label
-        grid.addWidget(status_label, row, 3)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_host = QWidget()
-        btn_host.setLayout(btn_row)
-        for label, fn, style in (
-            ("使能", motion_axis_servo_on, ""),
-            ("回零", motion_axis_go_home, ""),
-            ("定位", motion_axis_move_abs, ""),
-            ("停止", motion_axis_stop, "DangerBtn"),
+        # 操作按钮优先占位，避免被挤到右侧重叠
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        for label, fn, primary, danger in (
+            ("使能", motion_axis_servo_on, False, False),
+            ("回零", motion_axis_go_home, False, False),
+            ("定位", motion_axis_move_abs, True, False),
+            ("停止", motion_axis_stop, False, True),
         ):
-            btn = QPushButton(label)
-            if style:
-                btn.setObjectName(style)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn = _make_btn(label, primary=primary, danger=danger)
             btn.clicked.connect(
                 lambda _c=False, k=axis.key, f=fn, n=f"{axis.label} {label}": self._run_axis_action(
                     f, k, n
                 )
             )
             self._buttons.append(btn)
-            btn_row.addWidget(btn)
-        grid.addWidget(btn_host, row, 4)
+            actions.addWidget(btn, 1)
+        layout.addLayout(actions, 3)
 
-    def _add_do_row(self, grid: QGridLayout, row: int, do_item) -> None:
-        name = QLabel(do_item.label)
-        name.setObjectName("AxisName")
-        grid.addWidget(name, row, 0)
+        target_wrap = QHBoxLayout()
+        target_wrap.setSpacing(4)
+        t_lab = QLabel("目标")
+        t_lab.setObjectName("Field")
+        target_input = QLineEdit()
+        target_input.setFixedWidth(78)
+        pos_validator = QDoubleValidator(axis.pos_min, axis.pos_max, 3)
+        pos_validator.setNotation(QDoubleValidator.StandardNotation)
+        target_input.setValidator(pos_validator)
+        target_input.setPlaceholderText(axis.unit)
+        target_input.editingFinished.connect(lambda k=axis.key: self._sync_axis_params(k))
+        self._target_inputs[axis.key] = target_input
+        target_wrap.addWidget(t_lab)
+        target_wrap.addWidget(target_input)
+        layout.addLayout(target_wrap)
 
-        q_label = QLabel(do_item.q_name)
-        q_label.setObjectName("AxisStatus")
-        grid.addWidget(q_label, row, 1)
+        vel_wrap = QHBoxLayout()
+        vel_wrap.setSpacing(4)
+        v_lab = QLabel("速度")
+        v_lab.setObjectName("Field")
+        vel_input = QLineEdit()
+        vel_input.setFixedWidth(70)
+        vel_validator = QDoubleValidator(0.1, 5000.0, 2)
+        vel_validator.setNotation(QDoubleValidator.StandardNotation)
+        vel_input.setValidator(vel_validator)
+        vel_input.setPlaceholderText(f"{axis.vel_default:g}")
+        vel_input.editingFinished.connect(lambda k=axis.key: self._sync_axis_params(k))
+        self._velocity_inputs[axis.key] = vel_input
+        vel_wrap.addWidget(v_lab)
+        vel_wrap.addWidget(vel_input)
+        layout.addLayout(vel_wrap)
 
-        status_label = QLabel("未读取")
-        status_label.setObjectName("AxisStatus")
-        self._do_status_labels[do_item.key] = status_label
-        grid.addWidget(status_label, row, 2)
+        status = QLabel("未读取")
+        status.setObjectName("Status")
+        status.setMinimumWidth(130)
+        status.setMaximumWidth(180)
+        self._axis_status_labels[axis.key] = status
+        layout.addWidget(status)
+        return row
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_host = QWidget()
-        btn_host.setLayout(btn_row)
+    def _build_do_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Card")
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(12)
 
-        btn_off = QPushButton("关闭")
+        title = QLabel("数字输出")
+        title.setObjectName("Title")
+        layout.addWidget(title)
+
+        for do_item in motion_cfg.DO_OUTPUTS:
+            layout.addWidget(self._build_do_item(do_item), 1)
+        return card
+
+    def _build_do_item(self, do_item: DoOutputMap) -> QWidget:
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        name = QLabel(f"{do_item.label} ({do_item.q_name})")
+        name.setObjectName("Name")
+        row.addWidget(name)
+
+        status = QLabel("关闭")
+        status.setObjectName("Status")
+        self._do_status_labels[do_item.key] = status
+        row.addWidget(status)
+
+        btn_off = _make_btn("关闭", danger=True)
+        btn_on = _make_btn("开启", primary=True)
         btn_off.clicked.connect(
             lambda _c=False, k=do_item.key, n=f"{do_item.label} 关闭": self._run_do_action(
                 k, False, n
             )
         )
-        btn_on = QPushButton("开启")
         btn_on.clicked.connect(
             lambda _c=False, k=do_item.key, n=f"{do_item.label} 开启": self._run_do_action(
                 k, True, n
@@ -541,23 +442,113 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._do_off_buttons[do_item.key] = btn_off
         self._do_on_buttons[do_item.key] = btn_on
         self._buttons.extend([btn_off, btn_on])
-        btn_row.addWidget(btn_off)
-        btn_row.addWidget(btn_on)
-        grid.addWidget(btn_host, row, 3)
+        row.addWidget(btn_off, 1)
+        row.addWidget(btn_on, 1)
+        return box
+
+    def _build_scanner_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        title = QLabel(f"扫码枪 · {scanner_cfg.SCANNER_MODEL}")
+        title.setObjectName("Title")
+        layout.addWidget(title)
+
+        self._scanner_status_label = QLabel("状态：未测试")
+        self._scanner_status_label.setObjectName("Status")
+        layout.addWidget(self._scanner_status_label)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(8)
+        btn_test = _make_btn("连接")
+        btn_scan = _make_btn("扫码", primary=True)
+        btn_clear = _make_btn("清空")
+        btn_test.clicked.connect(
+            lambda: self._run_scanner_action(scanner_test_connection, "扫码枪连接测试")
+        )
+        btn_scan.clicked.connect(
+            lambda: self._run_scanner_action(scanner_trigger_read, "触发扫码")
+        )
+        btn_clear.clicked.connect(
+            lambda: self._run_scanner_action(scanner_clear_result, "清空读码结果")
+        )
+        self._buttons.extend([btn_test, btn_scan, btn_clear])
+        btns.addWidget(btn_test, 1)
+        btns.addWidget(btn_scan, 1)
+        btns.addWidget(btn_clear, 1)
+        layout.addLayout(btns)
+
+        self._scanner_result_label = QLabel("读码：—")
+        self._scanner_result_label.setObjectName("Result")
+        layout.addWidget(self._scanner_result_label)
+        return card
+
+    def _build_balance_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        title = QLabel(f"天平 · {balance_cfg.BALANCE_MODEL}")
+        title.setObjectName("Title")
+        layout.addWidget(title)
+
+        self._balance_status_label = QLabel("状态：未测试")
+        self._balance_status_label.setObjectName("Status")
+        layout.addWidget(self._balance_status_label)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        btn_test = _make_btn("连接")
+        btn_read = _make_btn("读重", primary=True)
+        btn_tare = _make_btn("去皮")
+        btn_test.clicked.connect(
+            lambda: self._run_balance_action(balance_test_connection, "天平连接测试")
+        )
+        btn_read.clicked.connect(
+            lambda: self._run_balance_action(balance_read_weight, "读取重量")
+        )
+        btn_tare.clicked.connect(lambda: self._run_balance_action(balance_tare, "去皮"))
+        self._buttons.extend([btn_test, btn_read, btn_tare])
+        row1.addWidget(btn_test, 1)
+        row1.addWidget(btn_read, 1)
+        row1.addWidget(btn_tare, 1)
+        layout.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        btn_zero = _make_btn("清零")
+        btn_clear = _make_btn("清空")
+        btn_zero.clicked.connect(lambda: self._run_balance_action(balance_zero, "清零"))
+        btn_clear.clicked.connect(
+            lambda: self._run_balance_action(balance_clear_result, "清空读重结果")
+        )
+        self._buttons.extend([btn_zero, btn_clear])
+        row2.addWidget(btn_zero, 1)
+        row2.addWidget(btn_clear, 1)
+        row2.addStretch(1)
+        layout.addLayout(row2)
+
+        self._balance_result_label = QLabel("读重：—")
+        self._balance_result_label.setObjectName("Result")
+        layout.addWidget(self._balance_result_label)
+        return card
 
     def _compact_status(self, axis_key: str) -> str:
         if self._ctx is None:
             return "未读取"
         st = self._ctx.motion.axis(axis_key)
         axis = motion_cfg.AXIS_BY_KEY[axis_key]
-        flags = []
-        flags.append("使能" if st.servo_enabled else "未使能")
-        flags.append("已回零" if st.homed else "未回零")
+        flags = ["ON" if st.servo_enabled else "OFF", "回零" if st.homed else "未零"]
         if st.moving:
-            flags.append("运动中")
+            flags.append("运动")
         if st.alarm:
             flags.append("报警")
-        return f"{' · '.join(flags)} · {st.actual_position:g}{axis.unit}"
+        return f"{' '.join(flags)}  {st.actual_position:g}{axis.unit}"
 
     def _load_motion_params_from_state(self) -> None:
         if self._ctx is None:
@@ -593,7 +584,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         mode = "仿真" if motion.simulation_mode else "联机"
         conn = "已连接" if motion.plc_connected or motion.simulation_mode else "未连接"
         self._status_label.setText(
-            f"{conn} · {mode} · 最近：{motion.last_action or '—'}"
+            f"PLC：{conn} · {mode} · 最近：{motion.last_action or '—'}"
         )
         for axis in motion_cfg.AXES:
             label = self._axis_status_labels.get(axis.key)
@@ -613,8 +604,11 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             )
         if self._scanner_result_label is not None:
             barcode = st.last_barcode or "—"
-            history = " / ".join(st.read_history[:5]) if st.read_history else "—"
-            self._scanner_result_label.setText(f"读码结果：{barcode}\n历史：{history}")
+            history = " / ".join(st.read_history[:3]) if st.read_history else ""
+            text = f"读码：{barcode}"
+            if history:
+                text += f"  ·  历史：{history}"
+            self._scanner_result_label.setText(text)
 
     def _refresh_balance_status(self) -> None:
         if self._balance_ctx is None:
@@ -628,11 +622,10 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             )
         if self._balance_result_label is not None:
             weight = st.last_weight_display or "—"
-            raw = st.last_raw or "—"
-            history = " / ".join(st.read_history[:5]) if st.read_history else "—"
-            self._balance_result_label.setText(
-                f"读重结果：{weight}\n原始：{raw}\n历史：{history}"
-            )
+            text = f"读重：{weight}"
+            if st.last_raw:
+                text += f"  ·  原始：{st.last_raw}"
+            self._balance_result_label.setText(text)
 
     def _update_do_controls(self) -> None:
         if self._ctx is None:

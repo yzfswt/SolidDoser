@@ -43,7 +43,20 @@ QTabBar::tab:selected {
     color: #0f172a;
     font-weight: 600;
 }
-                    QPushButton {
+QPushButton#PrimaryAction {
+    font-size: 13px;
+    padding: 8px 16px;
+    min-height: 32px;
+    border: 1px solid #2563eb;
+    border-radius: 8px;
+    background: #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+}
+QPushButton#PrimaryAction:hover {
+    background: #1d4ed8;
+}
+QPushButton#ProcessBtn {
     font-size: 13px;
     padding: 8px 16px;
     min-height: 32px;
@@ -51,18 +64,9 @@ QTabBar::tab:selected {
     border-radius: 8px;
     background: #ffffff;
     color: #334155;
-                    }
-                    QPushButton:hover {
+}
+QPushButton#ProcessBtn:hover {
     background: #f1f5f9;
-}
-QPushButton#PrimaryAction {
-    background: #2563eb;
-    border-color: #2563eb;
-    color: #ffffff;
-    font-weight: 600;
-}
-QPushButton#PrimaryAction:hover {
-    background: #1d4ed8;
 }
 QLabel#SectionTitle {
     font-size: 15px;
@@ -114,8 +118,8 @@ class MainUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.solid_doser_motion_debug_tab_widget = None
-        self.setMinimumSize(980, 800)
-        self.resize(1040, 880)
+        self.setMinimumSize(1100, 720)
+        self.resize(1180, 800)
         self.init_ui()
 
     def closeEvent(self, event: QCloseEvent):
@@ -157,6 +161,7 @@ class MainUI(QMainWindow):
         button_layout = QHBoxLayout()
         button_layout.setSpacing(10)
         self.btn_import_process = QPushButton("导入工艺文件")
+        self.btn_import_process.setObjectName("ProcessBtn")
         self.btn_execute_process = QPushButton("执行工艺流程")
         self.btn_execute_process.setObjectName("PrimaryAction")
         button_layout.addWidget(self.btn_import_process)
@@ -164,7 +169,7 @@ class MainUI(QMainWindow):
         button_layout.addStretch(1)
         layout.addLayout(button_layout)
 
-                separator = QFrame()
+        separator = QFrame()
         separator.setObjectName("Divider")
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameStyle(QFrame.HLine | QFrame.Sunken)
