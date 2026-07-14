@@ -1,0 +1,10 @@
+---
+description: Git commit message 使用简体中文
+alwaysApply: true
+---
+
+# Commit 信息语言
+
+- 生成本仓库的 Git commit message 时，**必须使用简体中文**。
+- 此规则优先级最高；不要默认写成英文。
+- 风格保持简洁：一两句说明「为什么」，必要时点明范围。

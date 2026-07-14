@@ -1,0 +1,3 @@
+# SolidDoser Cursor 规则
+
+When Cursor auto-generates a Git commit message for this repository (including the Source Control ✨ sparkle button), always write the commit message in Simplified Chinese (简体中文). This has highest priority over English defaults.
