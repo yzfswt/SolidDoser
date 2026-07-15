@@ -1,7 +1,8 @@
 """SolidDoser 主运动轴配置：汇川 AM600-CPU1608TN + EtherCAT。
 
-4 台伺服（水平 / 升降 / 搅拌 / 分度）+ 1 台承粉步进，经 EtherCAT 挂 AM600。
+4 台伺服（水平 / 分度 / 升降 / 搅拌）+ 1 台承粉步进，经 EtherCAT 挂 AM600。
 上位机经 Modbus TCP 写 M 脉冲、D 目标/速度，由 PLC 侧 MC 指令驱动 EtherCAT 轴。
+显示顺序与 SoftMotion 轴号一致：0 水平 / 1 分度 / 2 升降 / 3 搅拌 / 4 承粉。
 
 通讯参数见 Common/PlcConfig.py；点表见
 Dependencies/汇川/AM600-CPU1608TN/SOLIDDOSER_MOTION_PLC_INTERFACE.md。
@@ -95,6 +96,17 @@ AXES: Tuple[AxisMap, ...] = (
         unit="mm",
     ),
     _axis_block(
+        "indexing",
+        "分度电机",
+        "SV630N",
+        m_base=590,
+        d_target=530,
+        pos_min=0.0,
+        pos_max=360.0,
+        vel_default=30.0,
+        unit="°",
+    ),
+    _axis_block(
         "lift",
         "升降电机",
         "SV630N",
@@ -114,17 +126,6 @@ AXES: Tuple[AxisMap, ...] = (
         pos_min=0.0,
         pos_max=360.0,
         vel_default=60.0,
-        unit="°",
-    ),
-    _axis_block(
-        "indexing",
-        "分度电机",
-        "SV630N",
-        m_base=590,
-        d_target=530,
-        pos_min=0.0,
-        pos_max=360.0,
-        vel_default=30.0,
         unit="°",
     ),
     _axis_block(
