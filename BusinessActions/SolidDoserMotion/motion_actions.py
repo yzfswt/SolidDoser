@@ -66,7 +66,7 @@ def motion_axis_go_home(ctx: SolidDoserMotionContext, axis_key: str) -> ActionRe
 def motion_axis_move_abs(ctx: SolidDoserMotionContext, axis_key: str) -> ActionResult:
     axis = cfg.AXIS_BY_KEY[axis_key]
     st = ctx.motion.axis(axis_key)
-    action = f"{axis.label} 绝对定位"
+    action = f"{axis.label} 启动搅拌" if axis.key == "stirring" else f"{axis.label} 绝对定位"
     ok, detail = get_motion_driver().move_absolute(
         axis_key, st.target_position, st.velocity
     )

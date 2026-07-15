@@ -6,14 +6,14 @@
    打开已有 PLC_PRG，不要新建；不要粘 PROGRAM / END_PROGRAM
    1. 声明区：只粘 【声明开始】～【声明结束】
    2. 实现区：只粘 【实现开始】～【实现结束】
-   3. 先确保工程树里已有 FB_AxisHost 且能单独编译通过
+   3. 先确保工程树里已有 FB_AxisHost、FB_AxisVelocityHost 且能单独编译通过
    ============================================== *)
 
 (* ========== 【声明开始】 ========== *)
 VAR
     fbHori : FB_AxisHost;
     fbLift : FB_AxisHost;
-    fbStir : FB_AxisHost;
+    fbStir : FB_AxisVelocityHost;
     fbIdx  : FB_AxisHost;
     fbPwd  : FB_AxisHost;
 END_VAR

@@ -235,6 +235,17 @@ class SolidDoserMotionModbusClient:
             poll_interval_s=cfg.POLL_INTERVAL_S,
         )
 
+    def start_velocity(self, axis: AxisMap, velocity: float) -> Result:
+        ok, detail = self._write_d_real(axis.d_velocity, velocity)
+        if not ok:
+            return False, detail
+        return self._pulse_m_until(
+            axis.m_cmd_move,
+            axis.m_status_move_done,
+            timeout_s=cfg.COMMAND_TIMEOUT_S,
+            poll_interval_s=cfg.POLL_INTERVAL_S,
+        )
+
     def stop(self, axis: AxisMap) -> Result:
         ok, detail = self._write_coil(axis.m_cmd_stop, True)
         if not ok:

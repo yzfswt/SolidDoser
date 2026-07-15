@@ -109,6 +109,9 @@ class SolidDoserMotionDriver:
         self, axis_key: str, target: float, velocity: float
     ) -> Result:
         axis = self._axis(axis_key)
+        if axis.key == "stirring":
+            return self._start_stirring(axis, velocity)
+
         target = max(axis.pos_min, min(axis.pos_max, target))
         if self._simulation:
             st = self._sim_status.axis(axis_key)
@@ -132,6 +135,26 @@ class SolidDoserMotionDriver:
         if not ok:
             return False, detail
         return True, f"{axis.label} 已移动至 {target:g} {axis.unit}（{detail}）。"
+
+    def _start_stirring(self, axis: AxisMap, velocity: float) -> Result:
+        if self._simulation:
+            st = self._sim_status.axis(axis.key)
+            if not st.servo_enabled:
+                return False, f"{axis.label} 未使能，请先使能。"
+            st.homed = True
+            st.moving = velocity != 0
+            return True, f"{axis.label} 已按 {velocity:g} {axis.unit}/s 启动（仿真）。"
+
+        ok, detail = self._ensure_connected()
+        if not ok:
+            return False, detail
+        status, _ = self._client.read_axis_status(axis)
+        if not status.servo_enabled:
+            return False, f"{axis.label} 未使能，请先使能。"
+        ok, detail = self._client.start_velocity(axis, velocity)
+        if not ok:
+            return False, detail
+        return True, f"{axis.label} 已按 {velocity:g} {axis.unit}/s 启动（{detail}）。"
 
     def stop(self, axis_key: str) -> Result:
         axis = self._axis(axis_key)
