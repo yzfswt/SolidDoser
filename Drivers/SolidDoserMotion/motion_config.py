@@ -22,6 +22,31 @@ POWER_ON_TIMEOUT_S = 15.0
 POLL_INTERVAL_S = 0.2
 POSITION_MATCH_TOLERANCE = 0.5
 
+# 分度盘：8 工位，工位号 0～7，相邻相差 45°
+INDEXING_STATION_COUNT = 8
+INDEXING_STEP_DEG = 45.0
+INDEXING_AXIS_KEY = "indexing"
+
+
+def indexing_station_to_angle(station: int) -> float:
+    """工位号 → 目标角度（°）。"""
+    s = station % INDEXING_STATION_COUNT
+    if s < 0:
+        s += INDEXING_STATION_COUNT
+    return s * INDEXING_STEP_DEG
+
+
+def indexing_angle_to_station(angle_deg: float) -> int:
+    """角度 → 最近工位号（0～7），用于绝对定位后同步逻辑工位。"""
+    return int(round(angle_deg / INDEXING_STEP_DEG)) % INDEXING_STATION_COUNT
+
+
+def normalize_indexing_station(station: int) -> int:
+    s = station % INDEXING_STATION_COUNT
+    if s < 0:
+        s += INDEXING_STATION_COUNT
+    return s
+
 
 @dataclass(frozen=True)
 class AxisMap:

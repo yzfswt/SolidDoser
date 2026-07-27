@@ -5,6 +5,7 @@ from typing import Tuple
 
 from BusinessActions.SolidDoserMotion.motion_context import SolidDoserMotionContext
 from Drivers.SolidDoserMotion import motion_config as cfg
+from Drivers.SolidDoserMotion.indexing_disc import get_indexing_disc
 from Drivers.SolidDoserMotion.motion_driver import (
     apply_status_to_state,
     get_motion_driver,
@@ -30,6 +31,8 @@ def _fail(ctx: SolidDoserMotionContext, action: str, msg: str) -> ActionResult:
 def _sync_status(ctx: SolidDoserMotionContext) -> None:
     status, err = get_motion_driver().read_status()
     apply_status_to_state(ctx.motion, status)
+    # 分度盘逻辑工位以上位机 IndexingDisc 为准
+    ctx.motion.set_indexing_station(get_indexing_disc().current_station)
     if err:
         ctx.motion.last_message = err
 
@@ -38,6 +41,7 @@ def motion_refresh_all(ctx: SolidDoserMotionContext) -> ActionResult:
     action = "刷新全部电机状态"
     status, err = get_motion_driver().read_status()
     apply_status_to_state(ctx.motion, status)
+    ctx.motion.set_indexing_station(get_indexing_disc().current_station)
     if err:
         return _fail(ctx, action, err)
     return _ok(ctx, action, ctx.motion.overview_summary())
@@ -54,9 +58,45 @@ def motion_axis_servo_on(ctx: SolidDoserMotionContext, axis_key: str) -> ActionR
 
 
 def motion_axis_go_home(ctx: SolidDoserMotionContext, axis_key: str) -> ActionResult:
+    """通用轴回零；分度轴委托给分度盘.home()。"""
+    if axis_key == cfg.INDEXING_AXIS_KEY:
+        return indexing_disc_home(ctx)
+
     axis = cfg.AXIS_BY_KEY[axis_key]
     action = f"{axis.label} 回零"
     ok, detail = get_motion_driver().go_home(axis_key)
+    _sync_status(ctx)
+    if ok:
+        return _ok(ctx, action, detail)
+    return _fail(ctx, action, detail)
+
+
+def indexing_disc_home(ctx: SolidDoserMotionContext) -> ActionResult:
+    """分度盘回零。"""
+    action = "分度盘回零"
+    ok, detail = get_indexing_disc().home()
+    _sync_status(ctx)
+    if ok:
+        return _ok(ctx, action, detail)
+    return _fail(ctx, action, detail)
+
+
+def indexing_disc_step_forward(ctx: SolidDoserMotionContext) -> ActionResult:
+    """分度盘向前一分度。"""
+    action = "分度盘向前一分度"
+    velocity = ctx.motion.axis(cfg.INDEXING_AXIS_KEY).velocity
+    ok, detail = get_indexing_disc().step_forward(velocity)
+    _sync_status(ctx)
+    if ok:
+        return _ok(ctx, action, detail)
+    return _fail(ctx, action, detail)
+
+
+def indexing_disc_step_backward(ctx: SolidDoserMotionContext) -> ActionResult:
+    """分度盘向后一分度。"""
+    action = "分度盘向后一分度"
+    velocity = ctx.motion.axis(cfg.INDEXING_AXIS_KEY).velocity
+    ok, detail = get_indexing_disc().step_backward(velocity)
     _sync_status(ctx)
     if ok:
         return _ok(ctx, action, detail)
@@ -71,6 +111,10 @@ def motion_axis_move_abs(ctx: SolidDoserMotionContext, axis_key: str) -> ActionR
         axis_key, st.target_position, st.velocity
     )
     _sync_status(ctx)
+    if ok and axis_key == cfg.INDEXING_AXIS_KEY:
+        station = get_indexing_disc().sync_station_from_target_angle(st.target_position)
+        ctx.motion.set_indexing_station(station)
+        detail = f"{detail} · 当前工位 {station}"
     if ok:
         return _ok(ctx, action, detail)
     return _fail(ctx, action, detail)

@@ -19,6 +19,12 @@ class KeyenceScannerDriver:
     def __init__(self) -> None:
         self._simulation = self._resolve_simulation_mode()
         self._client = KeyenceScannerTcpClient()
+        if not self._simulation:
+            ok, detail = self._client.connect()
+            if ok:
+                logger.info("扫码枪 TCP 连接已预热：%s:%s", cfg.SCANNER_HOST, cfg.SCANNER_PORT)
+            else:
+                logger.warning("扫码枪 TCP 预热失败：%s", detail)
 
     @property
     def simulation(self) -> bool:

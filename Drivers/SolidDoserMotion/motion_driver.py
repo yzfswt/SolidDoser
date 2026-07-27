@@ -112,7 +112,7 @@ class SolidDoserMotionDriver:
         if axis.key == "stirring":
             return self._start_stirring(axis, velocity)
 
-        target = max(axis.pos_min, min(axis.pos_max, target))
+        target = self._clamp_or_wrap_position(axis, target)
         if self._simulation:
             st = self._sim_status.axis(axis_key)
             if not st.servo_enabled:
@@ -136,7 +136,22 @@ class SolidDoserMotionDriver:
             return False, detail
         return True, f"{axis.label} 已移动至 {target:g} {axis.unit}（{detail}）。"
 
+    @staticmethod
+    def _clamp_or_wrap_position(axis: AxisMap, value: float) -> float:
+        """分度轴按 [pos_min, pos_max) 取模；其它轴限幅。"""
+        if axis.key == cfg.INDEXING_AXIS_KEY:
+            span = axis.pos_max - axis.pos_min
+            if span <= 0:
+                return axis.pos_min
+            wrapped = (value - axis.pos_min) % span
+            if wrapped < 0:
+                wrapped += span
+            return axis.pos_min + wrapped
+        return max(axis.pos_min, min(axis.pos_max, value))
+
     def _start_stirring(self, axis: AxisMap, velocity: float) -> Result:
+        if velocity == 0:
+            return False, f"{axis.label} 转速不能为 0，请输入正转或反转速度。"
         if self._simulation:
             st = self._sim_status.axis(axis.key)
             if not st.servo_enabled:

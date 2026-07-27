@@ -23,6 +23,8 @@ class AxisMotionState:
 class SolidDoserMotionState:
     axes: Dict[str, AxisMotionState] = field(default_factory=dict)
     do_states: Dict[str, bool] = field(default_factory=dict)
+    # 分度盘逻辑工位 0～7；回零后归 0，±45° 按工位步进，不依赖实际角度小数
+    indexing_station: int = 0
     plc_connected: bool = False
     simulation_mode: bool = False
     last_action: str = ""
@@ -37,6 +39,7 @@ class SolidDoserMotionState:
             }
         if not self.do_states:
             self.do_states = {item.key: False for item in cfg.DO_OUTPUTS}
+        self.indexing_station = cfg.normalize_indexing_station(self.indexing_station)
 
     def axis(self, key: str) -> AxisMotionState:
         if key not in self.axes:
@@ -44,10 +47,16 @@ class SolidDoserMotionState:
             self.axes[key] = AxisMotionState(velocity=spec.vel_default)
         return self.axes[key]
 
+    def set_indexing_station(self, station: int) -> None:
+        self.indexing_station = cfg.normalize_indexing_station(station)
+
     def overview_summary(self) -> str:
         parts = []
         for axis in cfg.AXES:
             st = self.axis(axis.key)
             mode = "仿真" if self.simulation_mode else "联机"
-            parts.append(f"{axis.label}({mode}): {st.status_summary}")
+            extra = ""
+            if axis.key == cfg.INDEXING_AXIS_KEY:
+                extra = f" 工位{self.indexing_station}"
+            parts.append(f"{axis.label}({mode}): {st.status_summary}{extra}")
         return "；".join(parts)
