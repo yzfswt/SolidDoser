@@ -1,4 +1,4 @@
-"""赛多利斯 MCE524S 天平驱动（经 DW-RS20TM1 TCP→RS232 透传）。"""
+"""赛多利斯 MCE524S 天平驱动（经 UT-6801A TCP→RS232 透传）。"""
 from __future__ import annotations
 
 import logging
@@ -6,11 +6,11 @@ from typing import Optional, Tuple
 
 from Drivers.SartoriusBalance import balance_config as cfg
 from Drivers.SartoriusBalance.balance_protocol import BalanceReading, parse_sbi_line
-from Drivers.SerialServer.dw_rs20tm1_config import (
+from Drivers.SerialServer.ut_6801a_config import (
     SERIAL_SERVER_HOST,
     SERIAL_SERVER_PORT,
 )
-from Drivers.SerialServer.dw_rs20tm1_transport import DwRs20tm1TcpClient
+from Drivers.SerialServer.ut_6801a_transport import Ut6801aTcpClient
 
 logger = logging.getLogger("soliddoser.balance")
 
@@ -23,7 +23,7 @@ _driver: Optional["SartoriusBalanceDriver"] = None
 class SartoriusBalanceDriver:
     def __init__(self) -> None:
         self._simulation = self._resolve_simulation_mode()
-        self._client = DwRs20tm1TcpClient()
+        self._client = Ut6801aTcpClient()
 
     @property
     def simulation(self) -> bool:
@@ -33,7 +33,7 @@ class SartoriusBalanceDriver:
     def _resolve_simulation_mode() -> bool:
         if cfg.BALANCE_USE_SIMULATION:
             return True
-        client = DwRs20tm1TcpClient()
+        client = Ut6801aTcpClient()
         ok, _ = client.test_connection()
         if ok:
             return False

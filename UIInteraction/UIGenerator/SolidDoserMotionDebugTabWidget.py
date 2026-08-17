@@ -33,19 +33,23 @@ from BusinessActions.SartoriusBalance.balance_context import BalanceContext
 from BusinessActions.SolidDoserMotion.motion_actions import (
     indexing_disc_step_backward,
     indexing_disc_step_forward,
-    motion_axis_go_home,
+    motion_axis_go_datum,
     motion_axis_move_abs,
     motion_axis_servo_on,
     motion_axis_stop,
     motion_do_set,
+    motion_horizontal_go_origin,
+    motion_indexing_go_origin,
+    motion_lift_go_origin,
+    motion_powder_go_origin,
     motion_refresh_all,
 )
 from BusinessActions.SolidDoserMotion.motion_context import SolidDoserMotionContext
 from Drivers.KeyenceScanner import scanner_config as scanner_cfg
 from Drivers.SartoriusBalance import balance_config as balance_cfg
-from Drivers.SerialServer import dw_rs20tm1_config as serial_cfg
+from Drivers.SerialServer import ut_6801a_config as serial_cfg
 from Drivers.SolidDoserMotion import motion_config as motion_cfg
-from Drivers.SolidDoserMotion.motion_config import AxisMap, DoOutputMap
+from Drivers.SolidDoserMotion.motion_config import AxisMap, DiInputMap, DoOutputMap
 from UIInteraction.ParameterManagement.ParameterStorage import ParameterStorage
 
 ActionFn = Callable[[SolidDoserMotionContext], Tuple[bool, str]]
@@ -54,14 +58,18 @@ BalanceActionFn = Callable[[BalanceContext], Tuple[bool, str]]
 
 _STIR_AXIS_KEY = "stirring"
 _INDEXING_AXIS_KEY = motion_cfg.INDEXING_AXIS_KEY
+_HORIZONTAL_AXIS_KEY = motion_cfg.HORIZONTAL_AXIS_KEY
+_LIFT_AXIS_KEY = motion_cfg.LIFT_AXIS_KEY
+_POWDER_AXIS_KEY = motion_cfg.POWDER_AXIS_KEY
 _FIELD_LABEL_WIDTH = 28
 _TARGET_INPUT_MIN_WIDTH = 56
 _VELOCITY_INPUT_MIN_WIDTH = 52
 _AXIS_STATUS_MIN_WIDTH = 120
-# 6 列按钮区：等比拉伸填满行宽，各行同列竖直对齐
-_AXIS_BTN_COLS = 6
-_AXIS_BTN_MIN_WIDTH = 52
-_AXIS_BTN_SPACING = 6
+# 按钮列：使能 / 回基准点 / 回原点 / 定位 / 前进 / 后退 / 停止
+# 目标、速度插在「回原点」与「定位」之间
+_AXIS_BTN_COLS = 7
+_AXIS_BTN_MIN_WIDTH = 76  # 保证「回基准点」四字完整显示
+_AXIS_BTN_SPACING = 4
 
 _STYLESHEET = """
 SolidDoserMotionDebugTabWidget {
@@ -113,19 +121,19 @@ QLabel#Result {
 }
 QLineEdit {
     font-size: 12px;
-    padding: 4px 6px;
+    padding: 2px 6px;
     border: 1px solid #cbd5e1;
     border-radius: 4px;
     background: #ffffff;
-    min-height: 28px;
-    max-height: 28px;
+    min-height: 30px;
+    max-height: 30px;
 }
 QLineEdit:focus {
     border: 1px solid #3b82f6;
 }
 QPushButton {
     font-size: 12px;
-    padding: 4px 12px;
+    padding: 2px 10px;
     min-height: 30px;
     max-height: 30px;
     border: 1px solid #cbd5e1;
@@ -158,7 +166,11 @@ QPushButton#DangerBtn:hover {
     background: #ffe4e6;
 }
 QPushButton#AxisBtn {
-    padding: 4px 4px;
+    padding: 2px 2px;
+}
+QPushButton#PrimaryBtn,
+QPushButton#DangerBtn {
+    padding: 2px 4px;
 }
 """
 
@@ -288,15 +300,18 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._do_status_labels: Dict[str, QLabel] = {}
         self._do_on_buttons: Dict[str, QPushButton] = {}
         self._do_off_buttons: Dict[str, QPushButton] = {}
+        self._di_status_labels: Dict[str, QLabel] = {}
         self._target_inputs: Dict[str, QLineEdit] = {}
         self._velocity_inputs: Dict[str, QLineEdit] = {}
         self._scanner_status_label: Optional[QLabel] = None
         self._scanner_result_label: Optional[QLabel] = None
         self._balance_status_label: Optional[QLabel] = None
         self._balance_result_label: Optional[QLabel] = None
+        self._param_storage: Optional[ParameterStorage] = None
         self._build_ui()
 
     def bind_parameter_storage(self, param_storage: ParameterStorage) -> None:
+        self._param_storage = param_storage
         self._ctx = SolidDoserMotionContext(param_storage)
         self._scanner_ctx = ScannerContext(param_storage)
         self._balance_ctx = BalanceContext(param_storage)
@@ -304,6 +319,15 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._refresh_status()
         self._refresh_scanner_status()
         self._refresh_balance_status()
+
+    def _system_busy(self) -> bool:
+        return bool(self._param_storage and self._param_storage.is_system_busy)
+
+    def _reject_if_system_busy(self) -> bool:
+        if not self._system_busy():
+            return False
+        self._append_log(False, "系统自动流程运行中，调试运动已锁定。", "调试")
+        return True
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -337,6 +361,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
 
         root.addWidget(self._build_motion_card())
         root.addWidget(self._build_do_card())
+        root.addWidget(self._build_di_card())
 
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
@@ -367,7 +392,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
     def _build_axis_row(self, axis: AxisMap) -> QWidget:
         row = QFrame()
         row.setObjectName("AxisRow")
-        row.setMinimumHeight(44)
+        row.setMinimumHeight(40)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(4, 6, 4, 6)
         layout.setSpacing(6)
@@ -379,12 +404,19 @@ class SolidDoserMotionDebugTabWidget(QWidget):
 
         is_stir_axis = axis.key == _STIR_AXIS_KEY
         is_indexing_axis = axis.key == _INDEXING_AXIS_KEY
+        is_horizontal_axis = axis.key == _HORIZONTAL_AXIS_KEY
+        is_lift_axis = axis.key == _LIFT_AXIS_KEY
+        is_powder_axis = axis.key == _POWDER_AXIS_KEY
 
-        actions_box = QWidget()
-        actions = QHBoxLayout(actions_box)
-        actions.setContentsMargins(0, 0, 0, 0)
-        actions.setSpacing(_AXIS_BTN_SPACING)
+        def _new_actions_box() -> tuple[QWidget, QHBoxLayout]:
+            box = QWidget()
+            box_layout = QHBoxLayout(box)
+            box_layout.setContentsMargins(0, 0, 0, 0)
+            box_layout.setSpacing(_AXIS_BTN_SPACING)
+            return box, box_layout
 
+        # 前段按钮：使能 / 回基准点 / 回原点
+        pre_box, pre_actions = _new_actions_box()
         btn_servo = _make_axis_btn("使能")
         btn_servo.clicked.connect(
             lambda _c=False, k=axis.key: self._run_axis_action(
@@ -392,63 +424,54 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             )
         )
         self._buttons.append(btn_servo)
-        _add_axis_btn_slot(actions, btn_servo)
+        _add_axis_btn_slot(pre_actions, btn_servo)
 
         if is_stir_axis:
-            _add_axis_btn_slot(actions, None)
+            _add_axis_btn_slot(pre_actions, None)
+            _add_axis_btn_slot(pre_actions, None)
         else:
-            btn_home = _make_axis_btn("回零")
-            btn_home.clicked.connect(
+            btn_datum = _make_axis_btn("回基准点")
+            btn_datum.clicked.connect(
                 lambda _c=False, k=axis.key: self._run_axis_action(
-                    motion_axis_go_home, k, f"{axis.label} 回零"
+                    motion_axis_go_datum, k, f"{axis.label} 回基准点"
                 )
             )
-            self._buttons.append(btn_home)
-            _add_axis_btn_slot(actions, btn_home)
+            self._buttons.append(btn_datum)
+            _add_axis_btn_slot(pre_actions, btn_datum)
 
-        move_label = "启动" if is_stir_axis else "定位"
-        btn_move = _make_axis_btn(move_label, primary=True)
-        btn_move.clicked.connect(
-            lambda _c=False, k=axis.key: self._run_axis_action(
-                motion_axis_move_abs, k, f"{axis.label} {move_label}"
-            )
-        )
-        self._buttons.append(btn_move)
-        _add_axis_btn_slot(actions, btn_move)
-
-        if is_indexing_axis:
-            btn_fwd = _make_axis_btn("前进")
-            btn_fwd.clicked.connect(
-                lambda _c=False: self._run_indexing_disc_action(
-                    indexing_disc_step_forward, "分度盘前进"
+            if is_horizontal_axis:
+                btn_origin = _make_axis_btn("回原点")
+                btn_origin.clicked.connect(
+                    lambda _c=False: self._run_horizontal_go_origin()
                 )
-            )
-            self._buttons.append(btn_fwd)
-            _add_axis_btn_slot(actions, btn_fwd)
-
-            btn_back = _make_axis_btn("后退")
-            btn_back.clicked.connect(
-                lambda _c=False: self._run_indexing_disc_action(
-                    indexing_disc_step_backward, "分度盘后退"
+                self._buttons.append(btn_origin)
+                _add_axis_btn_slot(pre_actions, btn_origin)
+            elif is_indexing_axis:
+                btn_origin = _make_axis_btn("回原点")
+                btn_origin.clicked.connect(
+                    lambda _c=False: self._run_indexing_go_origin()
                 )
-            )
-            self._buttons.append(btn_back)
-            _add_axis_btn_slot(actions, btn_back)
-        else:
-            _add_axis_btn_slot(actions, None)
-            _add_axis_btn_slot(actions, None)
+                self._buttons.append(btn_origin)
+                _add_axis_btn_slot(pre_actions, btn_origin)
+            elif is_lift_axis:
+                btn_origin = _make_axis_btn("回原点")
+                btn_origin.clicked.connect(
+                    lambda _c=False: self._run_lift_go_origin()
+                )
+                self._buttons.append(btn_origin)
+                _add_axis_btn_slot(pre_actions, btn_origin)
+            elif is_powder_axis:
+                btn_origin = _make_axis_btn("回原点")
+                btn_origin.clicked.connect(
+                    lambda _c=False: self._run_powder_go_origin()
+                )
+                self._buttons.append(btn_origin)
+                _add_axis_btn_slot(pre_actions, btn_origin)
+            else:
+                _add_axis_btn_slot(pre_actions, None)
+        layout.addWidget(pre_box, 3)
 
-        btn_stop = _make_axis_btn("停止", danger=True)
-        btn_stop.clicked.connect(
-            lambda _c=False, k=axis.key: self._run_axis_action(
-                motion_axis_stop, k, f"{axis.label} 停止"
-            )
-        )
-        self._buttons.append(btn_stop)
-        _add_axis_btn_slot(actions, btn_stop)
-
-        layout.addWidget(actions_box, 5)
-
+        # 目标 / 速度：放在定位按钮前
         target_box = QWidget()
         target_wrap = QHBoxLayout(target_box)
         target_wrap.setContentsMargins(0, 0, 0, 0)
@@ -469,7 +492,9 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             pos_validator.setNotation(QDoubleValidator.StandardNotation)
             target_input.setValidator(pos_validator)
             target_input.setPlaceholderText(axis.unit)
-            target_input.editingFinished.connect(lambda k=axis.key: self._sync_axis_params(k))
+            target_input.editingFinished.connect(
+                lambda k=axis.key: self._sync_axis_params(k)
+            )
             self._target_inputs[axis.key] = target_input
             target_wrap.addWidget(target_input, 1)
         layout.addWidget(target_box, 2)
@@ -497,6 +522,50 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         vel_wrap.addWidget(v_lab)
         vel_wrap.addWidget(vel_input, 1)
         layout.addWidget(vel_box, 2)
+
+        # 后段按钮：定位 / 前进 / 后退 / 停止
+        post_box, post_actions = _new_actions_box()
+        move_label = "启动" if is_stir_axis else "定位"
+        btn_move = _make_axis_btn(move_label, primary=True)
+        btn_move.clicked.connect(
+            lambda _c=False, k=axis.key: self._run_axis_action(
+                motion_axis_move_abs, k, f"{axis.label} {move_label}"
+            )
+        )
+        self._buttons.append(btn_move)
+        _add_axis_btn_slot(post_actions, btn_move)
+
+        if is_indexing_axis:
+            btn_fwd = _make_axis_btn("前进")
+            btn_fwd.clicked.connect(
+                lambda _c=False: self._run_indexing_disc_action(
+                    indexing_disc_step_forward, "分度盘前进"
+                )
+            )
+            self._buttons.append(btn_fwd)
+            _add_axis_btn_slot(post_actions, btn_fwd)
+
+            btn_back = _make_axis_btn("后退")
+            btn_back.clicked.connect(
+                lambda _c=False: self._run_indexing_disc_action(
+                    indexing_disc_step_backward, "分度盘后退"
+                )
+            )
+            self._buttons.append(btn_back)
+            _add_axis_btn_slot(post_actions, btn_back)
+        else:
+            _add_axis_btn_slot(post_actions, None)
+            _add_axis_btn_slot(post_actions, None)
+
+        btn_stop = _make_axis_btn("停止", danger=True)
+        btn_stop.clicked.connect(
+            lambda _c=False, k=axis.key: self._run_axis_action(
+                motion_axis_stop, k, f"{axis.label} 停止"
+            )
+        )
+        self._buttons.append(btn_stop)
+        _add_axis_btn_slot(post_actions, btn_stop)
+        layout.addWidget(post_box, 4)
 
         status = QLabel("未读取")
         status.setObjectName("Status")
@@ -549,6 +618,38 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._buttons.extend([btn_off, btn_on])
         row.addWidget(btn_on, 1)
         row.addWidget(btn_off, 1)
+        return box
+
+    def _build_di_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Card")
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(12)
+
+        title = QLabel("传感器（DI）")
+        title.setObjectName("Title")
+        layout.addWidget(title)
+
+        for di_item in motion_cfg.DI_INPUTS:
+            layout.addWidget(self._build_di_item(di_item), 1)
+        layout.addStretch(1)
+        return card
+
+    def _build_di_item(self, di_item: DiInputMap) -> QWidget:
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        name = QLabel(f"{di_item.label}（{di_item.x_name}）")
+        name.setObjectName("Name")
+        row.addWidget(name)
+
+        status = QLabel("无瓶")
+        status.setObjectName("Status")
+        self._di_status_labels[di_item.key] = status
+        row.addWidget(status)
         return box
 
     def _build_scanner_card(self) -> QFrame:
@@ -651,7 +752,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         if axis.key == _STIR_AXIS_KEY:
             flags = ["ON" if st.servo_enabled else "OFF", "速度轴"]
         else:
-            flags = ["ON" if st.servo_enabled else "OFF", "回零" if st.homed else "未零"]
+            flags = ["ON" if st.servo_enabled else "OFF", "基准" if st.datum_ok else "未基准"]
         if st.moving:
             flags.append("运动")
         if st.alarm:
@@ -705,6 +806,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             if label is not None:
                 label.setText(self._compact_status(axis.key))
         self._update_do_controls()
+        self._update_di_labels()
 
     def _refresh_scanner_status(self) -> None:
         if self._scanner_ctx is None:
@@ -758,6 +860,15 @@ class SolidDoserMotionDebugTabWidget(QWidget):
                 btn_off.setObjectName("DangerBtn" if not on else "")
                 btn_off.setStyleSheet(_STYLESHEET)
 
+    def _update_di_labels(self) -> None:
+        if self._ctx is None:
+            return
+        for di_item in motion_cfg.DI_INPUTS:
+            present = self._ctx.motion.di_states.get(di_item.key, False)
+            label = self._di_status_labels.get(di_item.key)
+            if label is not None:
+                label.setText("有瓶" if present else "无瓶")
+
     def _set_buttons_enabled(self, enabled: bool) -> None:
         for btn in self._buttons:
             btn.setEnabled(enabled)
@@ -779,6 +890,8 @@ class SolidDoserMotionDebugTabWidget(QWidget):
     def _run_global_action(self, fn: ActionFn, action_name: str) -> None:
         if self._ctx is None or self._thread is not None:
             return
+        if self._reject_if_system_busy():
+            return
         self._sync_all_params()
         self._set_buttons_enabled(False)
         self._thread = _MotionActionThread(fn, self._ctx, action_name)
@@ -793,9 +906,71 @@ class SolidDoserMotionDebugTabWidget(QWidget):
     ) -> None:
         if self._ctx is None or self._thread is not None:
             return
+        if self._reject_if_system_busy():
+            return
         self._sync_axis_params(axis_key)
         self._set_buttons_enabled(False)
         self._thread = _AxisActionThread(fn, self._ctx, axis_key, action_name)
+        self._thread.finished.connect(self._on_action_finished)
+        self._thread.start()
+
+    def _run_horizontal_go_origin(self) -> None:
+        if self._ctx is None or self._thread is not None:
+            return
+        if self._reject_if_system_busy():
+            return
+        self._sync_axis_params(_HORIZONTAL_AXIS_KEY)
+        self._set_buttons_enabled(False)
+        self._thread = _MotionActionThread(
+            motion_horizontal_go_origin,
+            self._ctx,
+            "水平电机 回原点",
+        )
+        self._thread.finished.connect(self._on_action_finished)
+        self._thread.start()
+
+    def _run_indexing_go_origin(self) -> None:
+        if self._ctx is None or self._thread is not None:
+            return
+        if self._reject_if_system_busy():
+            return
+        self._sync_axis_params(_INDEXING_AXIS_KEY)
+        self._set_buttons_enabled(False)
+        self._thread = _MotionActionThread(
+            motion_indexing_go_origin,
+            self._ctx,
+            "分度电机 回原点",
+        )
+        self._thread.finished.connect(self._on_action_finished)
+        self._thread.start()
+
+    def _run_lift_go_origin(self) -> None:
+        if self._ctx is None or self._thread is not None:
+            return
+        if self._reject_if_system_busy():
+            return
+        self._sync_axis_params(_LIFT_AXIS_KEY)
+        self._set_buttons_enabled(False)
+        self._thread = _MotionActionThread(
+            motion_lift_go_origin,
+            self._ctx,
+            "升降电机 回原点",
+        )
+        self._thread.finished.connect(self._on_action_finished)
+        self._thread.start()
+
+    def _run_powder_go_origin(self) -> None:
+        if self._ctx is None or self._thread is not None:
+            return
+        if self._reject_if_system_busy():
+            return
+        self._sync_axis_params(_POWDER_AXIS_KEY)
+        self._set_buttons_enabled(False)
+        self._thread = _MotionActionThread(
+            motion_powder_go_origin,
+            self._ctx,
+            "承粉电机 回原点",
+        )
         self._thread.finished.connect(self._on_action_finished)
         self._thread.start()
 
@@ -806,6 +981,8 @@ class SolidDoserMotionDebugTabWidget(QWidget):
     ) -> None:
         if self._ctx is None or self._thread is not None:
             return
+        if self._reject_if_system_busy():
+            return
         self._sync_axis_params(_INDEXING_AXIS_KEY)
         self._set_buttons_enabled(False)
         self._thread = _MotionActionThread(fn, self._ctx, action_name)
@@ -814,6 +991,8 @@ class SolidDoserMotionDebugTabWidget(QWidget):
 
     def _run_do_action(self, do_key: str, on: bool, action_name: str) -> None:
         if self._ctx is None or self._thread is not None:
+            return
+        if self._reject_if_system_busy():
             return
         self._set_buttons_enabled(False)
         self._thread = _MotionActionThread(
@@ -827,6 +1006,8 @@ class SolidDoserMotionDebugTabWidget(QWidget):
     def _run_scanner_action(self, fn: ScannerActionFn, action_name: str) -> None:
         if self._scanner_ctx is None or self._thread is not None:
             return
+        if self._reject_if_system_busy():
+            return
         self._set_buttons_enabled(False)
         self._thread = _ScannerActionThread(fn, self._scanner_ctx, action_name)
         self._thread.finished.connect(self._on_action_finished)
@@ -834,6 +1015,8 @@ class SolidDoserMotionDebugTabWidget(QWidget):
 
     def _run_balance_action(self, fn: BalanceActionFn, action_name: str) -> None:
         if self._balance_ctx is None or self._thread is not None:
+            return
+        if self._reject_if_system_busy():
             return
         self._set_buttons_enabled(False)
         self._thread = _BalanceActionThread(fn, self._balance_ctx, action_name)

@@ -1,4 +1,4 @@
-"""赛多利斯 Cubis II MCE524S-2CCN-U 天平配置（SBI，经 DW-RS20TM1 RS232 透传）。"""
+"""赛多利斯 Cubis II MCE524S-2CCN-U 天平配置（SBI，经 UT-6801A RS232 透传）。"""
 from __future__ import annotations
 
 BALANCE_MODEL = "MCE524S-2CCN-U"

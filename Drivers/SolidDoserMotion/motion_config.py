@@ -17,7 +17,7 @@ from Common.PlcConfig import MODBUS_SLAVE_ID, PLC_HOST, PLC_MODEL, PLC_PORT
 MOTION_USE_SIMULATION = False
 
 COMMAND_TIMEOUT_S = 120.0
-HOME_TIMEOUT_S = 180.0
+DATUM_TIMEOUT_S = 180.0  # 找外部基准点（PLC CmdHome / MC_Home）超时
 POWER_ON_TIMEOUT_S = 15.0
 POLL_INTERVAL_S = 0.2
 POSITION_MATCH_TOLERANCE = 0.5
@@ -26,6 +26,116 @@ POSITION_MATCH_TOLERANCE = 0.5
 INDEXING_STATION_COUNT = 8
 INDEXING_STEP_DEG = 45.0
 INDEXING_AXIS_KEY = "indexing"
+
+# 水平轴命名位置（mm）：原点 / 空闲 / 工作
+HORIZONTAL_AXIS_KEY = "horizontal"
+
+
+@dataclass(frozen=True)
+class IndexingNamedPosition:
+    key: str
+    label: str
+    position_deg: float
+
+
+# 分度轴命名位置（°）：原点对应工位 0
+INDEXING_POSITIONS: Tuple[IndexingNamedPosition, ...] = (
+    IndexingNamedPosition("origin", "原点位置", 0.0),
+)
+
+INDEXING_POSITION_BY_KEY: Dict[str, IndexingNamedPosition] = {
+    p.key: p for p in INDEXING_POSITIONS
+}
+
+
+def indexing_position_deg(key: str) -> float:
+    """按命名位置 key 取目标角度（°）。"""
+    if key not in INDEXING_POSITION_BY_KEY:
+        raise KeyError(f"未知分度位置: {key}")
+    return INDEXING_POSITION_BY_KEY[key].position_deg
+
+
+@dataclass(frozen=True)
+class HorizontalNamedPosition:
+    key: str
+    label: str
+    position_mm: float
+
+
+HORIZONTAL_POSITIONS: Tuple[HorizontalNamedPosition, ...] = (
+    HorizontalNamedPosition("origin", "原点位置", 0.0),
+    HorizontalNamedPosition("idle", "空闲位置", 10.0),
+    HorizontalNamedPosition("work", "工作位置", 20.0),
+)
+
+HORIZONTAL_POSITION_BY_KEY: Dict[str, HorizontalNamedPosition] = {
+    p.key: p for p in HORIZONTAL_POSITIONS
+}
+
+
+def horizontal_position_mm(key: str) -> float:
+    """按命名位置 key 取目标行程（mm）。"""
+    if key not in HORIZONTAL_POSITION_BY_KEY:
+        raise KeyError(f"未知水平位置: {key}")
+    return HORIZONTAL_POSITION_BY_KEY[key].position_mm
+
+
+# 升降轴命名位置（mm）：原点 / 空闲 / 工作
+LIFT_AXIS_KEY = "lift"
+
+
+@dataclass(frozen=True)
+class LiftNamedPosition:
+    key: str
+    label: str
+    position_mm: float
+
+
+LIFT_POSITIONS: Tuple[LiftNamedPosition, ...] = (
+    LiftNamedPosition("origin", "原点位置", 0.0),
+    LiftNamedPosition("idle", "空闲位置", 10.0),
+    LiftNamedPosition("work", "工作位置", 20.0),
+)
+
+LIFT_POSITION_BY_KEY: Dict[str, LiftNamedPosition] = {
+    p.key: p for p in LIFT_POSITIONS
+}
+
+
+def lift_position_mm(key: str) -> float:
+    """按命名位置 key 取目标行程（mm）。"""
+    if key not in LIFT_POSITION_BY_KEY:
+        raise KeyError(f"未知升降位置: {key}")
+    return LIFT_POSITION_BY_KEY[key].position_mm
+
+
+# 承粉轴命名位置（mm）：原点 / 空闲 / 工作
+POWDER_AXIS_KEY = "powder"
+
+
+@dataclass(frozen=True)
+class PowderNamedPosition:
+    key: str
+    label: str
+    position_mm: float
+
+
+POWDER_POSITIONS: Tuple[PowderNamedPosition, ...] = (
+    PowderNamedPosition("origin", "原点位置", 0.0),
+    PowderNamedPosition("idle", "空闲位置", 10.0),
+    PowderNamedPosition("work", "工作位置", 20.0),
+)
+
+POWDER_POSITION_BY_KEY: Dict[str, PowderNamedPosition] = {
+    p.key: p for p in POWDER_POSITIONS
+}
+
+
+def powder_position_mm(key: str) -> float:
+    """按命名位置 key 取目标行程（mm）。"""
+    if key not in POWDER_POSITION_BY_KEY:
+        raise KeyError(f"未知承粉位置: {key}")
+    return POWDER_POSITION_BY_KEY[key].position_mm
 
 
 def indexing_station_to_angle(station: int) -> float:
@@ -55,6 +165,7 @@ class AxisMap:
     motor_type: str
     m_cmd_power: int
     m_status_power_ok: int
+    # 下列线圈对应 PLC CmdHome / StatusHomeDone / StatusHomed（找基准点 datum）
     m_cmd_home: int
     m_status_home_done: int
     m_cmd_move: int
@@ -184,3 +295,21 @@ DO_OUTPUTS: Tuple[DoOutputMap, ...] = (
 )
 
 DO_BY_KEY: Dict[str, DoOutputMap] = {item.key: item for item in DO_OUTPUTS}
+
+
+@dataclass(frozen=True)
+class DiInputMap:
+    key: str
+    label: str
+    x_address: int  # AM600 X 点 Modbus 地址（X0=0, X6=6, X8=8, XA=10 …）
+    x_name: str     # 丝印名，如 "Xn6"
+
+
+# DI 输入：试剂瓶有无传感器，接 AM600 Xn6 / Xn8 / XnA
+DI_INPUTS: Tuple[DiInputMap, ...] = (
+    DiInputMap("bottle_1", "试剂瓶1", 6, "Xn6"),
+    DiInputMap("bottle_2", "试剂瓶2", 8, "Xn8"),
+    DiInputMap("bottle_3", "试剂瓶3", 10, "XnA"),
+)
+
+DI_BY_KEY: Dict[str, DiInputMap] = {item.key: item for item in DI_INPUTS}

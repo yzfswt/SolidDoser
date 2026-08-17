@@ -88,6 +88,16 @@ class SolidDoserMotionModbusClient:
             return False, f"写 M{address} 失败"
         return True, ""
 
+    def _read_discrete_input(self, address: int) -> Tuple[Optional[bool], str]:
+        if not self.connected:
+            return None, "PLC 未连接"
+        resp = mb.read_discrete_inputs(
+            self._client, address, count=1, device_id=cfg.MODBUS_SLAVE_ID
+        )
+        if resp.isError() or not resp.bits:
+            return None, f"读 X{address} 失败"
+        return bool(resp.bits[0]), ""
+
     def _read_coil(self, address: int) -> Tuple[Optional[bool], str]:
         if not self.connected:
             return None, "PLC 未连接"
@@ -165,7 +175,7 @@ class SolidDoserMotionModbusClient:
             status.target_position = target
 
         for attr, m_addr in (
-            ("homed", axis.m_status_homed),
+            ("datum_ok", axis.m_status_homed),
             ("moving", axis.m_status_moving),
             ("alarm", axis.m_status_alarm),
         ):
@@ -199,6 +209,12 @@ class SolidDoserMotionModbusClient:
                 errors.append(f"{do_item.label}:{err}")
             elif state is not None:
                 device.do_states[do_item.key] = state
+        for di_item in cfg.DI_INPUTS:
+            state, err = self._read_discrete_input(di_item.x_address)
+            if err:
+                errors.append(f"{di_item.label}:{err}")
+            elif state is not None:
+                device.di_states[di_item.key] = state
         if errors:
             return device, "；".join(errors)
         return device, ""
@@ -211,11 +227,12 @@ class SolidDoserMotionModbusClient:
             poll_interval_s=cfg.POLL_INTERVAL_S,
         )
 
-    def go_home(self, axis: AxisMap) -> Result:
+    def go_datum(self, axis: AxisMap) -> Result:
+        """找外部基准点（PLC CmdHome → MC_Home）。"""
         return self._pulse_m_until(
             axis.m_cmd_home,
             axis.m_status_home_done,
-            timeout_s=cfg.HOME_TIMEOUT_S,
+            timeout_s=cfg.DATUM_TIMEOUT_S,
             poll_interval_s=cfg.POLL_INTERVAL_S,
         )
 

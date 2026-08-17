@@ -6,19 +6,21 @@ import sys
 
 def _default_db_path():
     """开发环境沿用 E 盘路径；PyInstaller 打包后使用本机可写目录，避免目标机无 E 盘失败。"""
-    override = os.environ.get("RESIN_PROCESS_DB")
+    override = os.environ.get("SOLIDDOSER_PROCESS_DB") or os.environ.get(
+        "RESIN_PROCESS_DB"
+    )
     if override:
         return os.path.normpath(override)
     if getattr(sys, "frozen", False):
         base = os.path.join(
             os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-            "ResinWorkstation",
+            "SolidDoser",
         )
         return os.path.join(base, "process_db.db")
     return os.path.join("E:\\AI_PJDataBase", "process_db.db")
 
 
-# 数据库文件路径（与主程序、InitDatabase.exe 共用同一逻辑）
+# 数据库文件路径（流程导入 / 执行共用）
 db_path = _default_db_path()
 
 

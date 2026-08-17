@@ -80,29 +80,30 @@ class SolidDoserMotionDriver:
             return True, f"{axis.label} 已使能。"
         return False, detail
 
-    def go_home(self, axis_key: str) -> Result:
+    def go_datum(self, axis_key: str) -> Result:
+        """找外部基准点（datum）；底层仍写 PLC CmdHome / MC_Home。"""
         axis = self._axis(axis_key)
         if self._simulation:
             st = self._sim_status.axis(axis_key)
             if not st.servo_enabled:
                 return False, f"{axis.label} 未使能，请先使能。"
-            st.homed = True
+            st.datum_ok = True
             st.moving = False
             st.actual_position = 0.0
             st.target_position = 0.0
-            return True, f"{axis.label} 已回零（仿真，0 {axis.unit}）。"
+            return True, f"{axis.label} 已回基准点（仿真，0 {axis.unit}）。"
         ok, detail = self._ensure_connected()
         if not ok:
             return False, detail
         status, _ = self._client.read_axis_status(axis)
         if not status.servo_enabled:
             return False, f"{axis.label} 未使能，请先使能。"
-        ok, detail = self._client.go_home(axis)
+        ok, detail = self._client.go_datum(axis)
         if not ok:
             return False, detail
         status, _ = self._client.read_axis_status(axis)
         return True, (
-            f"{axis.label} 已回零（{detail}，当前 {status.actual_position:g} {axis.unit}）。"
+            f"{axis.label} 已回基准点（{detail}，当前 {status.actual_position:g} {axis.unit}）。"
         )
 
     def move_absolute(
@@ -117,8 +118,8 @@ class SolidDoserMotionDriver:
             st = self._sim_status.axis(axis_key)
             if not st.servo_enabled:
                 return False, f"{axis.label} 未使能，请先使能。"
-            if not st.homed:
-                return False, f"{axis.label} 尚未回零，请先回零。"
+            if not st.datum_ok:
+                return False, f"{axis.label} 未回基准点，请先执行回基准点。"
             st.target_position = target
             st.actual_position = target
             st.moving = False
@@ -129,8 +130,8 @@ class SolidDoserMotionDriver:
         status, _ = self._client.read_axis_status(axis)
         if not status.servo_enabled:
             return False, f"{axis.label} 未使能，请先使能。"
-        if not status.homed:
-            return False, f"{axis.label} 尚未回零，请先回零。"
+        if not status.datum_ok:
+            return False, f"{axis.label} 未回基准点，请先执行回基准点。"
         ok, detail = self._client.move_absolute(axis, target, velocity)
         if not ok:
             return False, detail
@@ -156,7 +157,7 @@ class SolidDoserMotionDriver:
             st = self._sim_status.axis(axis.key)
             if not st.servo_enabled:
                 return False, f"{axis.label} 未使能，请先使能。"
-            st.homed = True
+            st.datum_ok = True
             st.moving = velocity != 0
             return True, f"{axis.label} 已按 {velocity:g} {axis.unit}/s 启动（仿真）。"
 
@@ -216,7 +217,7 @@ def apply_status_to_state(state, status: MotionDeviceStatus) -> None:
         axis_status = status.axis(axis.key)
         axis_state = state.axis(axis.key)
         axis_state.servo_enabled = axis_status.servo_enabled
-        axis_state.homed = axis_status.homed
+        axis_state.datum_ok = axis_status.datum_ok
         axis_state.moving = axis_status.moving
         axis_state.alarm = axis_status.alarm
         axis_state.actual_position = axis_status.actual_position
@@ -227,3 +228,5 @@ def apply_status_to_state(state, status: MotionDeviceStatus) -> None:
     state.simulation_mode = get_motion_driver().simulation
     for do_item in cfg.DO_OUTPUTS:
         state.do_states[do_item.key] = status.do_on(do_item.key)
+    for di_item in cfg.DI_INPUTS:
+        state.di_states[di_item.key] = status.di_on(di_item.key)

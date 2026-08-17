@@ -44,11 +44,12 @@ QTabBar::tab:selected {
     font-weight: 600;
 }
 QPushButton#PrimaryAction {
-    font-size: 13px;
-    padding: 8px 16px;
-    min-height: 32px;
+    font-size: 12px;
+    padding: 2px 10px;
+    min-height: 30px;
+    max-height: 30px;
     border: 1px solid #2563eb;
-    border-radius: 8px;
+    border-radius: 5px;
     background: #2563eb;
     color: #ffffff;
     font-weight: 600;
@@ -57,16 +58,18 @@ QPushButton#PrimaryAction:hover {
     background: #1d4ed8;
 }
 QPushButton#ProcessBtn {
-    font-size: 13px;
-    padding: 8px 16px;
-    min-height: 32px;
+    font-size: 12px;
+    padding: 2px 10px;
+    min-height: 30px;
+    max-height: 30px;
     border: 1px solid #cbd5e1;
-    border-radius: 8px;
+    border-radius: 5px;
     background: #ffffff;
     color: #334155;
 }
 QPushButton#ProcessBtn:hover {
     background: #f1f5f9;
+    border-color: #94a3b8;
 }
 QLabel#SectionTitle {
     font-size: 15px;
@@ -117,6 +120,7 @@ QHeaderView::section {
 class MainUI(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.solid_doser_auto_tab_widget = None
         self.solid_doser_motion_debug_tab_widget = None
         self.setMinimumSize(1100, 720)
         self.resize(1180, 800)
@@ -133,7 +137,8 @@ class MainUI(QMainWindow):
         root_layout.setContentsMargins(12, 12, 12, 12)
         tabs = QTabWidget()
 
-        tab_titles = ["流程导入", "调试"]
+        # 自动在调试之前
+        tab_titles = ["流程导入", "自动", "调试"]
         for idx, title in enumerate(tab_titles):
             tab = QWidget()
             layout = QVBoxLayout(tab)
@@ -142,6 +147,13 @@ class MainUI(QMainWindow):
             if idx == 0:
                 self._build_process_tab(layout)
             elif idx == 1:
+                from UIInteraction.UIGenerator.SolidDoserAutoTabWidget import (
+                    SolidDoserAutoTabWidget,
+                )
+
+                self.solid_doser_auto_tab_widget = SolidDoserAutoTabWidget()
+                layout.addWidget(self.solid_doser_auto_tab_widget)
+            elif idx == 2:
                 from UIInteraction.UIGenerator.SolidDoserMotionDebugTabWidget import (
                     SolidDoserMotionDebugTabWidget,
                 )
@@ -203,3 +215,9 @@ class MainUI(QMainWindow):
     def bind_solid_doser_motion_debug(self, param_storage) -> None:
         if self.solid_doser_motion_debug_tab_widget is not None:
             self.solid_doser_motion_debug_tab_widget.bind_parameter_storage(param_storage)
+
+    def bind_solid_doser(self, param_storage) -> None:
+        """绑定 SolidDoser 自动页 + 调试页到同一 ParameterStorage。"""
+        self.bind_solid_doser_motion_debug(param_storage)
+        if self.solid_doser_auto_tab_widget is not None:
+            self.solid_doser_auto_tab_widget.bind_parameter_storage(param_storage)

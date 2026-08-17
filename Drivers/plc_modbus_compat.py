@@ -1,6 +1,6 @@
 """pymodbus 2.x(slave) / 3.x(device_id) 兼容封装。
 
-SolidDoser 使用汇川 AM600-CPU1608TN Modbus TCP 从站（非 FTIR 原 Easy521）。
+SolidDoser 使用汇川 AM600-CPU1608TN Modbus TCP 从站。
 线圈对应 M 区、保持寄存器对应 D 区，具体编号以 AutoShop 点表为准。
 """
 from __future__ import annotations
@@ -36,6 +36,16 @@ def write_registers(
         return client.write_registers(address, values, **kw)
     except TypeError:
         return client.write_registers(address, values, slave=device_id)
+
+
+def read_discrete_inputs(
+    client: Any, address: int, *, count: int = 1, device_id: int = 1
+) -> Any:
+    kw = _device_kw(device_id)
+    try:
+        return client.read_discrete_inputs(address, count=count, **kw)
+    except TypeError:
+        return client.read_discrete_inputs(address, count, slave=device_id)
 
 
 def read_holding_registers(

@@ -3,6 +3,7 @@ from PySide6.QtWidgets import QApplication
 from UIInteraction.UIGenerator.MainUI import MainUI
 
 from Common.ActionLogger import get_action_logger
+from Common.AppLogging import setup_app_logging, stop_log_maintenance
 
 from BusinessActions.DeviceManager import DeviceManager
 
@@ -15,6 +16,9 @@ from UIInteraction.ControlActions.ButtonActionManager import ButtonActionManager
 from UIInteraction.ParameterManagement.ParameterStorage import ParameterStorage
 
 from BusinessActions.UIFeedback.UIFeedbackHandler import UIFeedbackHandler
+
+from BusinessActions.HostComm.bottle_feed_udp import start_bottle_feed_udp
+from BusinessActions.SolidDoserSystem.system_context import SolidDoserSystemContext
 
 from UDP_recivecmd import UDPSignalReceiver
 
@@ -66,6 +70,8 @@ def send_udp_response(host, port, message):
 
 if __name__ == "__main__":
 
+    setup_app_logging()
+
     app = QApplication(sys.argv)
 
     get_action_logger().record("应用启动")
@@ -76,7 +82,7 @@ if __name__ == "__main__":
 
     param_storage = ParameterStorage()
 
-    main_window.bind_solid_doser_motion_debug(param_storage)
+    main_window.bind_solid_doser(param_storage)
 
     ui_feedback = UIFeedbackHandler(main_window)
 
@@ -216,13 +222,17 @@ if __name__ == "__main__":
 
     udp_receiver2.start_listening()
 
-
+    bottle_feed_bridge = start_bottle_feed_udp(SolidDoserSystemContext(param_storage))
 
     def on_app_about_to_quit():
 
         udp_receiver.stop_listening()
 
         udp_receiver2.stop_listening()
+
+        bottle_feed_bridge.stop()
+
+        stop_log_maintenance()
 
         get_action_logger().persist()
 

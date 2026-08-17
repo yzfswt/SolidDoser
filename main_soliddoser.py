@@ -1,26 +1,38 @@
-"""SolidDoser 轻量启动：流程导入 + 调试。"""
-import logging
+"""SolidDoser 轻量启动：流程导入 + 自动 + 调试 + 主系统进料 UDP。"""
 import sys
 
 from PySide6.QtWidgets import QApplication
 
 from BusinessActions.DeviceManager import DeviceManager
+from BusinessActions.HostComm.bottle_feed_udp import start_bottle_feed_udp
+from BusinessActions.SolidDoserSystem.system_context import SolidDoserSystemContext
 from BusinessActions.UIFeedback.UIFeedbackHandler import UIFeedbackHandler
+from Common.ActionLogger import get_action_logger
+from Common.AppLogging import setup_app_logging, stop_log_maintenance
 from UIInteraction.ControlActions.ButtonActionManager import ButtonActionManager
-from UIInteraction.UIGenerator.MainUI import MainUI
 from UIInteraction.ParameterManagement.ParameterStorage import ParameterStorage
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+from UIInteraction.UIGenerator.MainUI import MainUI
 
 
 if __name__ == "__main__":
+    setup_app_logging()
     app = QApplication(sys.argv)
+    get_action_logger().record("应用启动")
     main_window = MainUI()
     param_storage = ParameterStorage()
-    main_window.bind_solid_doser_motion_debug(param_storage)
+    main_window.bind_solid_doser(param_storage)
     ui_feedback = UIFeedbackHandler(main_window)
     device_manager = DeviceManager(param_storage)
     ButtonActionManager(main_window, device_manager, param_storage, ui_feedback)
     main_window.setWindowTitle("SolidDoser 控制软件")
     main_window.show()
+
+    bottle_feed_bridge = start_bottle_feed_udp(SolidDoserSystemContext(param_storage))
+
+    def _on_quit() -> None:
+        bottle_feed_bridge.stop()
+        stop_log_maintenance()
+        get_action_logger().persist()
+
+    app.aboutToQuit.connect(_on_quit)
     sys.exit(app.exec())

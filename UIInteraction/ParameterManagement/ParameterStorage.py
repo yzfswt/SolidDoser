@@ -1,6 +1,7 @@
 from UIInteraction.ParameterManagement.BalanceModel import BalanceState
 from UIInteraction.ParameterManagement.ScannerModel import ScannerState
 from UIInteraction.ParameterManagement.SolidDoserMotionModel import SolidDoserMotionState
+from UIInteraction.ParameterManagement.SolidDoserSystemModel import SolidDoserSystemState
 
 
 class ParameterStorage:
@@ -13,5 +14,6 @@ class ParameterStorage:
         self.process_execution_total_steps = 0
         self.process_execution_current_command = ""
         self.solid_doser_motion = SolidDoserMotionState()
+        self.solid_doser_system = SolidDoserSystemState()
         self.scanner = ScannerState()
         self.balance = BalanceState()

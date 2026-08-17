@@ -1,0 +1,22 @@
+"""主系统 ↔ 加样系统：试剂瓶进/出料 UDP 配置。"""
+from __future__ import annotations
+
+import os
+
+# 加样系统本机监听（主系统连此端口发进料/出料完成等）
+BOTTLE_FEED_UDP_HOST = os.environ.get("SOLIDDOSER_BOTTLE_FEED_HOST", "127.0.0.1")
+BOTTLE_FEED_UDP_PORT = int(os.environ.get("SOLIDDOSER_BOTTLE_FEED_PORT", "8890"))
+
+# 主系统监听地址（加样系统主动发出料请求）
+HOST_MAIN_UDP_HOST = os.environ.get("SOLIDDOSER_HOST_MAIN_UDP_HOST", "127.0.0.1")
+HOST_MAIN_UDP_PORT = int(os.environ.get("SOLIDDOSER_HOST_MAIN_UDP_PORT", "8891"))
+
+# 出料：向主系统发请求后等待完成信号的超时（秒）
+BOTTLE_DISCHARGE_TIMEOUT_S = float(
+    os.environ.get("SOLIDDOSER_BOTTLE_DISCHARGE_TIMEOUT_S", "300")
+)
+
+CMD_BOTTLE_FEED_REQUEST = "BOTTLE_FEED_REQUEST"
+CMD_BOTTLE_FEED_DONE = "BOTTLE_FEED_DONE"
+CMD_BOTTLE_DISCHARGE_REQUEST = "BOTTLE_DISCHARGE_REQUEST"
+CMD_BOTTLE_DISCHARGE_DONE = "BOTTLE_DISCHARGE_DONE"

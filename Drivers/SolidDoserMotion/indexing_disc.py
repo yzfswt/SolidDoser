@@ -51,13 +51,13 @@ class IndexingDisc:
         """当前工位对应的指令角度（°）。"""
         return cfg.indexing_station_to_angle(self._station)
 
-    def home(self) -> Result:
-        """分度盘回零：驱动分度电机回零，成功后工位归 0。"""
-        ok, detail = self._driver.go_home(self._axis_key)
+    def go_datum(self) -> Result:
+        """分度盘回基准点：驱动分度电机找外部基准，成功后工位归 0。"""
+        ok, detail = self._driver.go_datum(self._axis_key)
         if not ok:
             return False, detail
         self._station = 0
-        return True, f"分度盘已回零（工位 0）。{detail}"
+        return True, f"分度盘已回基准点（工位 0）。{detail}"
 
     def step_forward(self, velocity: float) -> Result:
         """向前一分度：转到下一工位（工位 +1，绕回 0～7）。"""

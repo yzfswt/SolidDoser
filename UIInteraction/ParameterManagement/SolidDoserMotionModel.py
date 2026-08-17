@@ -12,7 +12,7 @@ class AxisMotionState:
     target_position: float = 0.0
     velocity: float = 50.0
     servo_enabled: bool = False
-    homed: bool = False
+    datum_ok: bool = False  # 已找到外部基准点
     moving: bool = False
     alarm: bool = False
     actual_position: float = 0.0
@@ -23,7 +23,8 @@ class AxisMotionState:
 class SolidDoserMotionState:
     axes: Dict[str, AxisMotionState] = field(default_factory=dict)
     do_states: Dict[str, bool] = field(default_factory=dict)
-    # 分度盘逻辑工位 0～7；回零后归 0，±45° 按工位步进，不依赖实际角度小数
+    di_states: Dict[str, bool] = field(default_factory=dict)
+    # 分度盘逻辑工位 0～7；回基准点后归 0，±45° 按工位步进，不依赖实际角度小数
     indexing_station: int = 0
     plc_connected: bool = False
     simulation_mode: bool = False
@@ -39,6 +40,8 @@ class SolidDoserMotionState:
             }
         if not self.do_states:
             self.do_states = {item.key: False for item in cfg.DO_OUTPUTS}
+        if not self.di_states:
+            self.di_states = {item.key: False for item in cfg.DI_INPUTS}
         self.indexing_station = cfg.normalize_indexing_station(self.indexing_station)
 
     def axis(self, key: str) -> AxisMotionState:
