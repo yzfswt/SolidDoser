@@ -1,20 +1,21 @@
 (* ==============================================
-   FB_AxisHost  — 单轴：上位机 M/D 握手 → MC_* 运动
+   FB_AxisHost  — 单轴：上位机 WORD 握手 → MC_* 运动
 
-   ★ InoProShop 粘贴注意（这条最容易导致连锁错误）★
-   1. 新建 FB，名称 FB_AxisHost，语言 ST
-   2. 切到「声明」页，只粘贴 【声明开始】到 【声明结束】之间
-      —— 不要粘 FUNCTION_BLOCK / END_FUNCTION_BLOCK
-   3. 切到「实现」页，只粘贴 【实现开始】到 【实现结束】之间
-   4. 双击 Application 下「库管理器」→ 添加库 → SM3_Basic
-      （树里点一下没用，必须双击打开，再点添加库）
-   5. SoftMotion3 轴类型必须用 AXIS_REF_SM3（不是 AXIS_REF）
-      DS402 真实轴 AXIS_REF_ETC_DS402_CS 可传入该 IN_OUT
-   6. SM3 的 MC_Home 仅有 Axis/Execute/Position；回零模式与速度
-      在驱动器/轴参数里配置，不要在 FB 里传 HomingMode/Velocity
+   使能：CmdPower 上升沿锁存 bEnable，MC_Power.Enable 保持
+   回零：
+     bUseControllerHoming=FALSE → MC_Home（伺服回原）
+     bUseControllerHoming=TRUE  → 自写搜原点（承粉，无限位）
+       1) 搜索方向走到原点 ON
+       2) 反向慢速，直到原点 OFF（下降沿）
+       3) 停止并 MC_SetPosition(0)
+       ★ 不用 SMC_Homing：FAST_SLOW 要限位(51)，FAST_BSLOW 不反向
+   定位：CmdMove 上升沿 → MC_MoveAbsolute
+   停止：CmdStop 上升沿 → MC_Stop + MC_Reset
+
+   ★ InoProShop：声明区 / 实现区分开粘贴；勿粘 FUNCTION_BLOCK 外壳
    ============================================== *)
 
-(* ========== 【声明开始】粘贴下面到实现页上面的声明区 ========== *)
+(* ========== 【声明开始】 ========== *)
 VAR_IN_OUT
     Axis            : AXIS_REF_SM3;
 END_VAR
@@ -28,6 +29,16 @@ VAR_INPUT
     Accel           : REAL := 500.0;
     Decel           : REAL := 500.0;
     Jerk            : REAL := 0.0;
+    bUseControllerHoming : BOOL := FALSE;
+    bHomeSwitch     : BOOL := FALSE;
+    (* TRUE：挡片挡住时 DI=TRUE *)
+    bHomeSwitchActiveHigh : BOOL := TRUE;
+    fHomeVelFast    : LREAL := 10.0;
+    fHomeVelSlow    : LREAL := 2.0;
+    fHomeAcc        : LREAL := 100.0;
+    fHomeDec        : LREAL := 100.0;
+    (* FALSE=负向搜索（承粉已验证） *)
+    bHomeDirPositive : BOOL := FALSE;
 END_VAR
 VAR_OUTPUT
     StatusPowerOk   : BOOL;
@@ -41,21 +52,44 @@ END_VAR
 VAR
     fbPower         : MC_Power;
     fbHome          : MC_Home;
+    fbHomeVel       : MC_MoveVelocity;
+    fbSetPos        : MC_SetPosition;
     fbMove          : MC_MoveAbsolute;
     fbStop          : MC_Stop;
     fbReadPos       : MC_ReadActualPosition;
     fbReset         : MC_Reset;
     rTrigPower      : R_TRIG;
-    rTrigHome       : R_TRIG;
+    rTrigHomeGate   : R_TRIG;
     rTrigMove       : R_TRIG;
     rTrigStop       : R_TRIG;
     bEnable         : BOOL;
     bHomedLatch     : BOOL;
+    bHomeGate       : BOOL;
+    bHomePending    : BOOL;
+    bHomeReset      : BOOL;
+    bAlarmLatch     : BOOL;
+    bStopReset      : BOOL;
+    bHomeExec       : BOOL;
+    bHomeDone       : BOOL;
+    bHomeBusy       : BOOL;
+    bHomeErr        : BOOL;
+    bHomeOn         : BOOL;
+    bHomeVelExec    : BOOL;
+    bSetPosExec     : BOOL;
+    nHomeStep       : INT;
+    nHomeWait       : INT;
+    nStopResetWait  : INT;
+    nHomeVelDir     : INT;
+    nSearchDir      : INT;
+    nLeaveDir       : INT;
+    rHomeVel        : REAL;
+    bReadPosEn      : BOOL;
+    bDoReset        : BOOL;
     rVelUse         : REAL;
 END_VAR
 (* ========== 【声明结束】 ========== *)
 
-(* ========== 【实现开始】粘贴到实现页 ========== *)
+(* ========== 【实现开始】 ========== *)
 rTrigPower(CLK := CmdPower);
 IF rTrigPower.Q THEN
     bEnable := TRUE;
@@ -69,11 +103,32 @@ fbPower(
 );
 StatusPowerOk := fbPower.Status AND NOT fbPower.Error;
 
+IF bHomeSwitchActiveHigh THEN
+    bHomeOn := bHomeSwitch;
+ELSE
+    bHomeOn := NOT bHomeSwitch;
+END_IF;
+IF bHomeDirPositive THEN
+    nSearchDir := 1;
+    nLeaveDir := -1;
+ELSE
+    nSearchDir := -1;
+    nLeaveDir := 1;
+END_IF;
+
 rTrigStop(CLK := CmdStop);
 IF rTrigStop.Q THEN
-    fbHome.Execute := FALSE;
+    bHomePending := FALSE;
+    bHomeReset := FALSE;
+    nHomeStep := 0;
+    nHomeWait := 0;
+    bHomeExec := FALSE;
+    bHomeVelExec := FALSE;
+    bSetPosExec := FALSE;
     fbMove.Execute := FALSE;
     fbStop.Execute := TRUE;
+    bStopReset := TRUE;
+    nStopResetWait := 0;
 END_IF;
 
 fbStop(
@@ -86,34 +141,193 @@ IF fbStop.Done OR fbStop.Error THEN
     fbStop.Execute := FALSE;
 END_IF;
 
-rTrigHome(CLK := CmdHome);
-IF rTrigHome.Q THEN
-    StatusHomeDone := FALSE;
-    fbMove.Execute := FALSE;
-    fbHome.Execute := TRUE;
+IF bStopReset THEN
+    nStopResetWait := nStopResetWait + 1;
+    IF nStopResetWait >= 10 THEN
+        bStopReset := FALSE;
+        nStopResetWait := 0;
+        bAlarmLatch := FALSE;
+    END_IF;
 END_IF;
 
-(* SM3 MC_Home：回零由驱动器执行，此处只给完成时的绝对位置 *)
-fbHome(
-    Axis := Axis,
-    Execute := fbHome.Execute,
-    Position := 0.0
-);
+bHomeGate := CmdHome AND StatusPowerOk AND NOT bAlarmLatch;
+rTrigHomeGate(CLK := bHomeGate);
+IF rTrigHomeGate.Q THEN
+    StatusHomeDone := FALSE;
+    bHomeDone := FALSE;
+    bHomeErr := FALSE;
+    fbMove.Execute := FALSE;
+    bHomeExec := FALSE;
+    bHomeVelExec := FALSE;
+    bSetPosExec := FALSE;
+    bHomePending := TRUE;
+    bHomeReset := TRUE;
+    nHomeStep := 1;
+    nHomeWait := 0;
+END_IF;
 
-IF CmdHome THEN
-    IF fbHome.Done THEN
-        StatusHomeDone := TRUE;
-        bHomedLatch := TRUE;
-        fbHome.Execute := FALSE;
+IF bUseControllerHoming THEN
+    (* 承粉：速度搜原点。10=正向搜索 12=反向找下降沿 13=停 14=置零 *)
+    IF bHomePending THEN
+        IF NOT CmdHome OR NOT StatusPowerOk OR bAlarmLatch THEN
+            bHomePending := FALSE;
+            bHomeReset := FALSE;
+            nHomeStep := 0;
+            bHomeVelExec := FALSE;
+            bSetPosExec := FALSE;
+        ELSE
+            CASE nHomeStep OF
+                1:
+                    nHomeWait := nHomeWait + 1;
+                    IF nHomeWait >= 8 THEN
+                        bHomeReset := FALSE;
+                        nHomeWait := 0;
+                        IF fbMove.Busy OR fbHomeVel.Busy OR fbStop.Busy THEN
+                            fbStop.Execute := TRUE;
+                            nHomeStep := 2;
+                        ELSE
+                            nHomeStep := 10;
+                        END_IF;
+                    END_IF;
+                2:
+                    IF NOT fbStop.Execute AND NOT fbStop.Busy THEN
+                        nHomeStep := 10;
+                    END_IF;
+                10: (* 已在原点上：直接反向找下降沿；否则快搜直到 ON *)
+                    IF bHomeOn THEN
+                        bHomeVelExec := FALSE;
+                        nHomeWait := 0;
+                        nHomeStep := 12;
+                    ELSE
+                        nHomeVelDir := nSearchDir;
+                        rHomeVel := TO_REAL(fHomeVelFast);
+                        bHomeVelExec := TRUE;
+                    END_IF;
+                12: (* 反向慢速，原点 OFF = 下降沿 *)
+                    nHomeWait := nHomeWait + 1;
+                    nHomeVelDir := nLeaveDir;
+                    rHomeVel := TO_REAL(fHomeVelSlow);
+                    bHomeVelExec := TRUE;
+                    IF (nHomeWait >= 3) AND (NOT bHomeOn) THEN
+                        bHomeVelExec := FALSE;
+                        fbStop.Execute := TRUE;
+                        nHomeStep := 13;
+                    END_IF;
+                13:
+                    IF NOT fbStop.Execute AND NOT fbStop.Busy THEN
+                        bSetPosExec := TRUE;
+                        nHomeStep := 14;
+                    END_IF;
+                14:
+                    IF fbSetPos.Done THEN
+                        bSetPosExec := FALSE;
+                        bHomeDone := TRUE;
+                        bHomedLatch := TRUE;
+                        bHomePending := FALSE;
+                        nHomeStep := 0;
+                    END_IF;
+                    IF fbSetPos.Error THEN
+                        bSetPosExec := FALSE;
+                        bHomeErr := TRUE;
+                        bAlarmLatch := TRUE;
+                        bHomePending := FALSE;
+                        nHomeStep := 0;
+                    END_IF;
+            END_CASE;
+        END_IF;
     END_IF;
-    IF fbHome.Error THEN
-        StatusHomeDone := FALSE;
-        fbHome.Execute := FALSE;
+
+    fbHomeVel(
+        Axis := Axis,
+        Execute := bHomeVelExec,
+        Velocity := rHomeVel,
+        Acceleration := TO_REAL(fHomeAcc),
+        Deceleration := TO_REAL(fHomeDec),
+        Jerk := 0.0,
+        Direction := nHomeVelDir
+    );
+    fbSetPos(
+        Axis := Axis,
+        Execute := bSetPosExec,
+        Position := 0.0
+    );
+    bHomeBusy := bHomePending OR fbHomeVel.Busy OR fbSetPos.Busy;
+    IF fbHomeVel.Error THEN
+        bHomeErr := TRUE;
+        bAlarmLatch := TRUE;
+        bHomeVelExec := FALSE;
+        bHomePending := FALSE;
+        nHomeStep := 0;
     END_IF;
 ELSE
+    IF bHomePending THEN
+        IF NOT CmdHome OR NOT StatusPowerOk OR bAlarmLatch THEN
+            bHomePending := FALSE;
+            bHomeReset := FALSE;
+            nHomeStep := 0;
+            bHomeExec := FALSE;
+        ELSE
+            CASE nHomeStep OF
+                1:
+                    nHomeWait := nHomeWait + 1;
+                    IF nHomeWait >= 8 THEN
+                        bHomeReset := FALSE;
+                        nHomeWait := 0;
+                        IF fbMove.Busy OR fbHome.Busy OR fbStop.Busy THEN
+                            fbStop.Execute := TRUE;
+                            nHomeStep := 2;
+                        ELSE
+                            nHomeStep := 3;
+                        END_IF;
+                    END_IF;
+                2:
+                    IF NOT fbStop.Execute AND NOT fbStop.Busy THEN
+                        nHomeWait := 0;
+                        nHomeStep := 3;
+                    END_IF;
+                3:
+                    nHomeWait := nHomeWait + 1;
+                    IF nHomeWait >= 8 THEN
+                        bHomeExec := TRUE;
+                        bHomePending := FALSE;
+                        nHomeStep := 0;
+                    END_IF;
+            END_CASE;
+        END_IF;
+    END_IF;
+    fbHome(
+        Axis := Axis,
+        Execute := bHomeExec,
+        Position := 0.0
+    );
+    bHomeDone := fbHome.Done;
+    bHomeBusy := fbHome.Busy;
+    bHomeErr := fbHome.Error;
+END_IF;
+
+IF bHomeDone AND NOT bUseControllerHoming THEN
+    StatusHomeDone := TRUE;
+    bHomedLatch := TRUE;
+    bHomeExec := FALSE;
+END_IF;
+IF bHomeDone AND bUseControllerHoming THEN
+    StatusHomeDone := TRUE;
+END_IF;
+IF bHomeErr AND NOT bUseControllerHoming THEN
     StatusHomeDone := FALSE;
-    IF NOT fbHome.Busy THEN
-        fbHome.Execute := FALSE;
+    bHomeExec := FALSE;
+    bHomePending := FALSE;
+    bHomeReset := FALSE;
+    nHomeStep := 0;
+    nHomeWait := 0;
+    bAlarmLatch := TRUE;
+END_IF;
+IF NOT CmdHome THEN
+    StatusHomeDone := FALSE;
+    IF NOT bHomeBusy THEN
+        bHomeExec := FALSE;
+        bHomeVelExec := FALSE;
+        bSetPosExec := FALSE;
     END_IF;
 END_IF;
 
@@ -121,9 +335,15 @@ StatusHomed := bHomedLatch;
 
 rTrigMove(CLK := CmdMove);
 rVelUse := SEL(Velocity > 0.0, Velocity, 10.0);
-IF rTrigMove.Q THEN
+IF rTrigMove.Q AND StatusPowerOk AND NOT bAlarmLatch THEN
     StatusMoveDone := FALSE;
-    fbHome.Execute := FALSE;
+    bHomePending := FALSE;
+    bHomeReset := FALSE;
+    nHomeStep := 0;
+    nHomeWait := 0;
+    bHomeExec := FALSE;
+    bHomeVelExec := FALSE;
+    bSetPosExec := FALSE;
     fbMove.Execute := TRUE;
 END_IF;
 
@@ -138,33 +358,34 @@ fbMove(
     Direction := 0
 );
 
-IF CmdMove THEN
-    IF fbMove.Done THEN
-        StatusMoveDone := TRUE;
-        fbMove.Execute := FALSE;
-    END_IF;
-    IF fbMove.Error THEN
-        StatusMoveDone := FALSE;
-        fbMove.Execute := FALSE;
-    END_IF;
-ELSE
+IF fbMove.Done THEN
+    StatusMoveDone := TRUE;
+    fbMove.Execute := FALSE;
+END_IF;
+IF fbMove.Error THEN
+    StatusMoveDone := FALSE;
+    fbMove.Execute := FALSE;
+    bAlarmLatch := TRUE;
+END_IF;
+IF NOT CmdMove THEN
     StatusMoveDone := FALSE;
     IF NOT fbMove.Busy THEN
         fbMove.Execute := FALSE;
     END_IF;
 END_IF;
 
-fbReadPos(Axis := Axis, Enable := TRUE);
+bReadPosEn := NOT bHomeBusy AND NOT fbMove.Busy AND NOT fbStop.Busy AND NOT bHomePending;
+fbReadPos(Axis := Axis, Enable := bReadPosEn);
 IF fbReadPos.Valid THEN
-    PosActual := fbReadPos.Position;
+    PosActual := TO_REAL(fbReadPos.Position);
 END_IF;
 
-StatusMoving := fbHome.Busy OR fbMove.Busy OR fbStop.Busy;
-StatusAlarm := fbPower.Error OR fbHome.Error OR fbMove.Error OR fbStop.Error;
-
-IF StatusAlarm AND CmdStop THEN
-    fbReset(Axis := Axis, Execute := TRUE);
-ELSE
-    fbReset(Axis := Axis, Execute := FALSE);
+StatusMoving := bHomeBusy OR fbMove.Busy OR fbStop.Busy OR bHomePending;
+IF fbPower.Error OR bHomeErr OR fbMove.Error OR fbStop.Error THEN
+    bAlarmLatch := TRUE;
 END_IF;
-(* ========== 【实现结束】不要粘 END_FUNCTION_BLOCK ========== *)
+StatusAlarm := bAlarmLatch;
+
+bDoReset := bStopReset OR bHomeReset OR (StatusAlarm AND CmdStop);
+fbReset(Axis := Axis, Execute := bDoReset);
+(* ========== 【实现结束】 ========== *)

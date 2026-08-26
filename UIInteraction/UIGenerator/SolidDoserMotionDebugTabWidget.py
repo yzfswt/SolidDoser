@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
     QFrame,
@@ -50,6 +50,7 @@ from Drivers.SartoriusBalance import balance_config as balance_cfg
 from Drivers.SerialServer import ut_6801a_config as serial_cfg
 from Drivers.SolidDoserMotion import motion_config as motion_cfg
 from Drivers.SolidDoserMotion.motion_config import AxisMap, DiInputMap, DoOutputMap
+from Drivers.SolidDoserMotion.motion_driver import get_motion_driver
 from UIInteraction.ParameterManagement.ParameterStorage import ParameterStorage
 
 ActionFn = Callable[[SolidDoserMotionContext], Tuple[bool, str]]
@@ -192,6 +193,20 @@ class _MotionActionThread(QThread):
             self.finished.emit(False, str(e), self._action_name)
 
 
+class _DiPollThread(QThread):
+    polled = Signal(dict, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def run(self) -> None:
+        try:
+            states, err = get_motion_driver().read_di_states()
+            self.polled.emit(states, err)
+        except Exception as exc:
+            self.polled.emit({}, str(exc))
+
+
 class _AxisActionThread(QThread):
     finished = Signal(bool, str, str)
 
@@ -293,7 +308,13 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._scanner_ctx: Optional[ScannerContext] = None
         self._balance_ctx: Optional[BalanceContext] = None
         self._thread: Optional[QThread] = None
+        self._stop_thread: Optional[QThread] = None
+        self._di_thread: Optional[QThread] = None
+        self._di_timer = QTimer(self)
+        self._di_timer.setInterval(400)
+        self._di_timer.timeout.connect(self._poll_di)
         self._buttons: List[QPushButton] = []
+        self._stop_buttons: List[QPushButton] = []
         self._status_label: Optional[QLabel] = None
         self._log_label: Optional[QLabel] = None
         self._axis_status_labels: Dict[str, QLabel] = {}
@@ -308,6 +329,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._balance_status_label: Optional[QLabel] = None
         self._balance_result_label: Optional[QLabel] = None
         self._param_storage: Optional[ParameterStorage] = None
+        self._di_closing = False
         self._build_ui()
 
     def bind_parameter_storage(self, param_storage: ParameterStorage) -> None:
@@ -319,6 +341,43 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._refresh_status()
         self._refresh_scanner_status()
         self._refresh_balance_status()
+        self._poll_di()
+        if self.isVisible():
+            self._di_timer.start()
+
+    def hideEvent(self, event) -> None:
+        self._di_timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._ctx is not None and not self._di_closing:
+            self._poll_di()
+            self._di_timer.start()
+
+    def closeEvent(self, event) -> None:
+        self.shutdown_di_poll()
+        super().closeEvent(event)
+
+    def shutdown_di_poll(self) -> None:
+        """主窗口关闭时调用，避免轮询线程未结束导致进程异常退出。"""
+        self._di_closing = True
+        self._stop_di_poll(wait=True)
+
+    def _stop_di_poll(self, *, wait: bool = False) -> None:
+        self._di_timer.stop()
+        thread = self._di_thread
+        if thread is None:
+            return
+        if not wait:
+            return
+        self._di_thread = None
+        try:
+            thread.polled.disconnect(self._on_di_polled)
+        except (RuntimeError, TypeError):
+            pass
+        if thread.isRunning():
+            thread.wait(2000)
 
     def _system_busy(self) -> bool:
         return bool(self._param_storage and self._param_storage.is_system_busy)
@@ -559,11 +618,9 @@ class SolidDoserMotionDebugTabWidget(QWidget):
 
         btn_stop = _make_axis_btn("停止", danger=True)
         btn_stop.clicked.connect(
-            lambda _c=False, k=axis.key: self._run_axis_action(
-                motion_axis_stop, k, f"{axis.label} 停止"
-            )
+            lambda _c=False, k=axis.key: self._run_axis_stop(k)
         )
-        self._buttons.append(btn_stop)
+        self._stop_buttons.append(btn_stop)
         _add_axis_btn_slot(post_actions, btn_stop)
         layout.addWidget(post_box, 4)
 
@@ -869,9 +926,56 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             if label is not None:
                 label.setText("有瓶" if present else "无瓶")
 
+    def _poll_di(self) -> None:
+        if (
+            self._di_closing
+            or self._ctx is None
+            or self._thread is not None
+            or self._di_thread is not None
+        ):
+            return
+        self._di_thread = _DiPollThread(self)
+        self._di_thread.polled.connect(self._on_di_polled)
+        self._di_thread.start()
+
+    def _on_di_polled(self, states: dict, err: str) -> None:
+        self._di_thread = None
+        if self._ctx is None:
+            return
+        if states:
+            self._ctx.motion.di_states.update(states)
+            self._update_di_labels()
+        if err and self._log_label is not None and self._thread is None:
+            self._log_label.setText(f"日志：失败 · 读传感器 · {err}")
+
     def _set_buttons_enabled(self, enabled: bool) -> None:
         for btn in self._buttons:
             btn.setEnabled(enabled)
+        # 运动过程中停止必须可点
+        for btn in self._stop_buttons:
+            btn.setEnabled(True)
+
+    def _run_axis_stop(self, axis_key: str) -> None:
+        """停止可打断正在进行的定位/回零：与动作线程并行下发 CmdStop。"""
+        if self._ctx is None:
+            return
+        if self._reject_if_system_busy():
+            return
+        action_name = f"{motion_cfg.AXIS_BY_KEY[axis_key].label} 停止"
+        # 先置取消标志，让定位/回零轮询尽快退出并自写 CmdStop
+        get_motion_driver().request_stop()
+        if self._stop_thread is not None:
+            return
+        self._stop_thread = _AxisActionThread(
+            motion_axis_stop, self._ctx, axis_key, action_name
+        )
+        self._stop_thread.finished.connect(self._on_stop_finished)
+        self._stop_thread.start()
+
+    def _on_stop_finished(self, ok: bool, msg: str, action_name: str) -> None:
+        self._stop_thread = None
+        self._refresh_status()
+        self._append_log(ok, msg, action_name)
 
     def _append_log(self, ok: bool, msg: str, action_name: str) -> None:
         if self._log_label is None:
@@ -994,6 +1098,9 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             return
         if self._reject_if_system_busy():
             return
+        di_thread = self._di_thread
+        if di_thread is not None and di_thread.isRunning():
+            di_thread.wait(500)
         self._set_buttons_enabled(False)
         self._thread = _MotionActionThread(
             lambda ctx: motion_do_set(ctx, do_key, on),

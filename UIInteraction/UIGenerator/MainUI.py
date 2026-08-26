@@ -127,6 +127,9 @@ class MainUI(QMainWindow):
         self.init_ui()
 
     def closeEvent(self, event: QCloseEvent):
+        debug = self.solid_doser_motion_debug_tab_widget
+        if debug is not None:
+            debug.shutdown_di_poll()
         super().closeEvent(event)
         get_action_logger().persist()
 

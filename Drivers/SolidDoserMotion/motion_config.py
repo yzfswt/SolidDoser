@@ -1,8 +1,9 @@
 """SolidDoser 主运动轴配置：汇川 AM600-CPU1608TN + EtherCAT。
 
 4 台伺服（水平 / 分度 / 升降 / 搅拌）+ 1 台承粉步进，经 EtherCAT 挂 AM600。
-上位机经 Modbus TCP 写 M 脉冲、D 目标/速度，由 PLC 侧 MC 指令驱动 EtherCAT 轴。
-显示顺序与 SoftMotion 轴号一致：0 水平 / 1 分度 / 2 升降 / 3 搅拌 / 4 承粉。
+上位机经 Modbus TCP 写轴命令字（WORD bit）与目标/速度（REAL），由 PLC 侧 MC 指令驱动 EtherCAT 轴。
+上位机按功能轴显示（水平 / 分度 / 升降 / 搅拌 / 承粉），不依赖 EtherCAT 从站顺序。
+SoftMotion 轴变量随接线顺序：Axis=分度 / Axis_1=升降 / Axis_2=搅拌 / Axis_3=水平 / Axis_4=承粉。
 
 通讯参数见 Common/PlcConfig.py；点表见
 Dependencies/汇川/AM600-CPU1608TN/SOLIDDOSER_MOTION_PLC_INTERFACE.md。
@@ -21,6 +22,21 @@ DATUM_TIMEOUT_S = 180.0  # 找外部基准点（PLC CmdHome / MC_Home）超时
 POWER_ON_TIMEOUT_S = 15.0
 POLL_INTERVAL_S = 0.2
 POSITION_MATCH_TOLERANCE = 0.5
+
+# 轴命令字 Cmd_*_W / 状态字 Sts_*_W 位定义（与 PLC_PRG 一致）
+CMD_BIT_POWER = 0
+CMD_BIT_HOME = 1
+CMD_BIT_MOVE = 2
+CMD_BIT_STOP = 3
+STS_BIT_POWER_OK = 0
+STS_BIT_HOME_DONE = 1
+STS_BIT_MOVE_DONE = 2
+STS_BIT_HOMED = 3
+STS_BIT_MOVING = 4
+STS_BIT_ALARM = 5
+
+# AM600 Modbus 保持寄存器地址 = %MW 索引（1:1）。
+# %MW230 → HR 230；%MD250（占 MW500/501）→ HR 500。
 
 # 分度盘：8 工位，工位号 0～7，相邻相差 45°
 INDEXING_STATION_COUNT = 8
@@ -163,17 +179,9 @@ class AxisMap:
     key: str
     label: str
     motor_type: str
-    m_cmd_power: int
-    m_status_power_ok: int
-    # 下列线圈对应 PLC CmdHome / StatusHomeDone / StatusHomed（找基准点 datum）
-    m_cmd_home: int
-    m_status_home_done: int
-    m_cmd_move: int
-    m_status_move_done: int
-    m_cmd_stop: int
-    m_status_homed: int
-    m_status_moving: int
-    m_status_alarm: int
+    # AM600 Modbus 线圈写不进 %MX；命令/状态走 D 区 WORD（与 DO 相同通道）
+    d_cmd: int  # Cmd_*_W：bit0 Power / bit1 Home / bit2 Move / bit3 Stop
+    d_sts: int  # Sts_*_W：bit0 PowerOk / bit1 HomeDone / bit2 MoveDone / bit3 Homed / bit4 Moving / bit5 Alarm
     d_target: int
     d_velocity: int
     d_actual: int
@@ -187,8 +195,9 @@ def _axis_block(
     key: str,
     label: str,
     motor_type: str,
-    m_base: int,
     d_target: int,
+    d_cmd: int,
+    d_sts: int,
     *,
     pos_min: float,
     pos_max: float,
@@ -199,16 +208,8 @@ def _axis_block(
         key=key,
         label=label,
         motor_type=motor_type,
-        m_cmd_power=m_base,
-        m_status_power_ok=m_base + 2,
-        m_cmd_home=m_base + 10,
-        m_status_home_done=m_base + 20,
-        m_cmd_move=m_base + 12,
-        m_status_move_done=m_base + 21,
-        m_cmd_stop=m_base + 13,
-        m_status_homed=m_base + 22,
-        m_status_moving=m_base + 23,
-        m_status_alarm=m_base + 24,
+        d_cmd=d_cmd,
+        d_sts=d_sts,
         d_target=d_target,
         d_velocity=d_target + 2,
         d_actual=d_target + 4,
@@ -224,8 +225,9 @@ AXES: Tuple[AxisMap, ...] = (
         "horizontal",
         "水平电机",
         "SV630N",
-        m_base=500,
-        d_target=500,
+        d_target=500,  # %MD250 → MW500
+        d_cmd=230,     # %MW230 Cmd_Hori_W
+        d_sts=231,     # %MW231 Sts_Hori_W
         pos_min=0.0,
         pos_max=2000.0,
         vel_default=100.0,
@@ -235,8 +237,9 @@ AXES: Tuple[AxisMap, ...] = (
         "indexing",
         "分度电机",
         "SV630N",
-        m_base=590,
-        d_target=530,
+        d_target=530,  # %MD265
+        d_cmd=236,
+        d_sts=237,
         pos_min=0.0,
         pos_max=360.0,
         vel_default=30.0,
@@ -246,8 +249,9 @@ AXES: Tuple[AxisMap, ...] = (
         "lift",
         "升降电机",
         "SV630N",
-        m_base=530,
-        d_target=510,
+        d_target=510,  # %MD255
+        d_cmd=232,
+        d_sts=233,
         pos_min=0.0,
         pos_max=500.0,
         vel_default=50.0,
@@ -257,8 +261,9 @@ AXES: Tuple[AxisMap, ...] = (
         "stirring",
         "搅拌电机",
         "SV630N",
-        m_base=560,
-        d_target=520,
+        d_target=520,  # %MD260
+        d_cmd=234,
+        d_sts=235,
         pos_min=0.0,
         pos_max=360.0,
         vel_default=60.0,
@@ -268,8 +273,9 @@ AXES: Tuple[AxisMap, ...] = (
         "powder",
         "承粉电机",
         "STF05-ECX-H",
-        m_base=620,
-        d_target=540,
+        d_target=540,  # %MD270
+        d_cmd=238,
+        d_sts=239,
         pos_min=0.0,
         pos_max=200.0,
         vel_default=20.0,
@@ -284,14 +290,14 @@ AXIS_BY_KEY: Dict[str, AxisMap] = {axis.key: axis for axis in AXES}
 class DoOutputMap:
     key: str
     label: str
-    m_coil: int
+    d_register: int  # D 区保持寄存器，1=开 0=关
     q_name: str
 
 
-# DO 输出：上位机写 M 线圈，PLC 程序映射至 Q 点
+# DO：保持寄存器地址 = %MW 索引（AM600）；%MW245 → 245
 DO_OUTPUTS: Tuple[DoOutputMap, ...] = (
-    DoOutputMap("vibration", "振动电机", 650, "Q0"),
-    DoOutputMap("ion_fan", "离子风扇", 651, "Q1"),
+    DoOutputMap("vibration", "振动电机", 245, "Q0.7"),
+    DoOutputMap("ion_fan", "离子风扇", 246, "Q0.6"),
 )
 
 DO_BY_KEY: Dict[str, DoOutputMap] = {item.key: item for item in DO_OUTPUTS}
@@ -301,7 +307,7 @@ DO_BY_KEY: Dict[str, DoOutputMap] = {item.key: item for item in DO_OUTPUTS}
 class DiInputMap:
     key: str
     label: str
-    x_address: int  # AM600 X 点 Modbus 地址（X0=0, X6=6, X8=8, XA=10 …）
+    x_address: int  # AM600 X 点，功能码 02：X0=0, X6=6, X8=8, XA=10
     x_name: str     # 丝印名，如 "Xn6"
 
 

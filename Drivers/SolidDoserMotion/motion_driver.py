@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional, Tuple
+import time
+from typing import Callable, Dict, Optional, Tuple
 
 from Drivers.SolidDoserMotion import motion_config as cfg
 from Drivers.SolidDoserMotion.motion_config import AxisMap, DoOutputMap
@@ -21,6 +22,15 @@ class SolidDoserMotionDriver:
         self._simulation = self._resolve_simulation_mode()
         self._client = SolidDoserMotionModbusClient()
         self._sim_status = MotionDeviceStatus()
+        self._stop_requested = False
+        self._client.set_motion_cancel_check(lambda: self._stop_requested)
+
+    def request_stop(self) -> None:
+        """中止正在等待的使能/回零/定位轮询。"""
+        self._stop_requested = True
+
+    def clear_stop_request(self) -> None:
+        self._stop_requested = False
 
     def set_motion_cancel_check(
         self, check: Optional[Callable[[], bool]]
@@ -67,11 +77,20 @@ class SolidDoserMotionDriver:
             return self._sim_status, detail
         return self._client.read_all_status()
 
+    def read_di_states(self) -> Tuple[Dict[str, bool], str]:
+        if self._simulation:
+            return dict(self._sim_status.di_states), ""
+        ok, detail = self._ensure_connected()
+        if not ok:
+            return dict(self._sim_status.di_states), detail
+        return self._client.read_di_states()
+
     def servo_on(self, axis_key: str) -> Result:
         axis = self._axis(axis_key)
         if self._simulation:
             self._sim_status.axis(axis_key).servo_enabled = True
             return True, f"{axis.label} 已使能（仿真）。"
+        self.clear_stop_request()
         ok, detail = self._ensure_connected()
         if not ok:
             return False, detail
@@ -92,12 +111,29 @@ class SolidDoserMotionDriver:
             st.actual_position = 0.0
             st.target_position = 0.0
             return True, f"{axis.label} 已回基准点（仿真，0 {axis.unit}）。"
+        self.clear_stop_request()
         ok, detail = self._ensure_connected()
         if not ok:
             return False, detail
         status, _ = self._client.read_axis_status(axis)
         if not status.servo_enabled:
             return False, f"{axis.label} 未使能，请先使能。"
+        if status.alarm:
+            return False, f"{axis.label} 处于报警，请先点「停止」复位后再回基准点。"
+        # 上位机回原（承粉等）要求 SoftMotion 已 Standstill；运动中先停再回零
+        if status.moving:
+            ok, detail = self._client.stop(axis)
+            if not ok:
+                return False, detail
+            settle_deadline = time.monotonic() + 5.0
+            while time.monotonic() < settle_deadline:
+                status, _ = self._client.read_axis_status(axis)
+                if not status.moving and not status.alarm:
+                    break
+                time.sleep(cfg.POLL_INTERVAL_S)
+            else:
+                return False, f"{axis.label} 停止后仍未停稳，无法回基准点。"
+        time.sleep(max(0.1, cfg.POLL_INTERVAL_S))
         ok, detail = self._client.go_datum(axis)
         if not ok:
             return False, detail
@@ -124,6 +160,7 @@ class SolidDoserMotionDriver:
             st.actual_position = target
             st.moving = False
             return True, f"{axis.label} 已移动至 {target:g} {axis.unit}（仿真）。"
+        self.clear_stop_request()
         ok, detail = self._ensure_connected()
         if not ok:
             return False, detail
@@ -161,6 +198,7 @@ class SolidDoserMotionDriver:
             st.moving = velocity != 0
             return True, f"{axis.label} 已按 {velocity:g} {axis.unit}/s 启动（仿真）。"
 
+        self.clear_stop_request()
         ok, detail = self._ensure_connected()
         if not ok:
             return False, detail
@@ -174,6 +212,7 @@ class SolidDoserMotionDriver:
 
     def stop(self, axis_key: str) -> Result:
         axis = self._axis(axis_key)
+        self.request_stop()
         if self._simulation:
             self._sim_status.axis(axis_key).moving = False
             return True, f"{axis.label} 已停止（仿真）。"
@@ -200,6 +239,14 @@ class SolidDoserMotionDriver:
         if not ok:
             return False, detail
         ok, detail = self._client.set_do_output(do_item, on)
+        logger.info(
+            "DO %s coil=%s on=%s ok=%s %s",
+            do_key,
+            do_item.d_register,
+            on,
+            ok,
+            detail,
+        )
         if ok:
             self._sim_status.do_states[do_key] = on
         return ok, detail
@@ -221,7 +268,7 @@ def apply_status_to_state(state, status: MotionDeviceStatus) -> None:
         axis_state.moving = axis_status.moving
         axis_state.alarm = axis_status.alarm
         axis_state.actual_position = axis_status.actual_position
-        axis_state.target_position = axis_status.target_position
+        # 目标/速度由调试界面与动作写入，勿用 PLC 寄存器覆盖（常为 0）
         axis_state.status_summary = axis_status.summary(axis.label, axis.unit)
 
     state.plc_connected = not get_motion_driver().simulation

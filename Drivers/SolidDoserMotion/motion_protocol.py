@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 import struct
+import threading
 import time
-from typing import Callable, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from Drivers import plc_modbus_compat as mb
 from Drivers.SolidDoserMotion import motion_config as cfg
@@ -34,6 +35,7 @@ class SolidDoserMotionModbusClient:
     def __init__(self) -> None:
         self._client = None
         self._connected = False
+        self._io_lock = threading.RLock()
         self._motion_cancel_check: Optional[Callable[[], bool]] = None
 
     def set_motion_cancel_check(
@@ -55,110 +57,173 @@ class SolidDoserMotionModbusClient:
         except ImportError as exc:
             return False, f"缺少 pymodbus：{exc}"
 
-        if self._client is not None:
-            self.close()
+        with self._io_lock:
+            if self._client is not None:
+                self.close()
 
-        client = ModbusTcpClient(cfg.PLC_HOST, port=cfg.PLC_PORT)
-        if not client.connect():
-            return False, f"无法连接 PLC {cfg.PLC_HOST}:{cfg.PLC_PORT}"
-        self._client = client
-        self._connected = True
-        return True, ""
+            client = ModbusTcpClient(cfg.PLC_HOST, port=cfg.PLC_PORT)
+            if not client.connect():
+                return False, f"无法连接 PLC {cfg.PLC_HOST}:{cfg.PLC_PORT}"
+            self._client = client
+            self._connected = True
+            return True, ""
 
     def close(self) -> None:
-        if self._client is not None:
-            try:
-                self._client.close()
-            except Exception:
-                pass
-        self._client = None
-        self._connected = False
+        with self._io_lock:
+            if self._client is not None:
+                try:
+                    self._client.close()
+                except Exception:
+                    pass
+            self._client = None
+            self._connected = False
 
     @property
     def connected(self) -> bool:
         return self._connected and self._client is not None
 
-    def _write_coil(self, address: int, value: bool) -> Result:
-        if not self.connected:
-            return False, "PLC 未连接"
-        resp = mb.write_coil(
-            self._client, address, value, device_id=cfg.MODBUS_SLAVE_ID
-        )
-        if resp.isError():
-            return False, f"写 M{address} 失败"
-        return True, ""
-
-    def _read_discrete_input(self, address: int) -> Tuple[Optional[bool], str]:
-        if not self.connected:
-            return None, "PLC 未连接"
-        resp = mb.read_discrete_inputs(
-            self._client, address, count=1, device_id=cfg.MODBUS_SLAVE_ID
-        )
-        if resp.isError() or not resp.bits:
-            return None, f"读 X{address} 失败"
-        return bool(resp.bits[0]), ""
-
-    def _read_coil(self, address: int) -> Tuple[Optional[bool], str]:
-        if not self.connected:
-            return None, "PLC 未连接"
-        resp = mb.read_coils(
-            self._client, address, count=1, device_id=cfg.MODBUS_SLAVE_ID
-        )
-        if resp.isError() or not resp.bits:
-            return None, f"读 M{address} 失败"
-        return bool(resp.bits[0]), ""
+    def read_di_states(self) -> Tuple[Dict[str, bool], str]:
+        """一次功能码 02 读取全部试剂瓶 X 点。"""
+        with self._io_lock:
+            if not self.connected:
+                return {}, "PLC 未连接"
+            addrs = [item.x_address for item in cfg.DI_INPUTS]
+            start = min(addrs)
+            count = max(addrs) - start + 1
+            resp = mb.read_discrete_inputs(
+                self._client, start, count=count, device_id=cfg.MODBUS_SLAVE_ID
+            )
+            if resp.isError() or not resp.bits:
+                return {}, "读 DI 失败"
+            bits = list(resp.bits)
+            states: Dict[str, bool] = {}
+            for item in cfg.DI_INPUTS:
+                idx = item.x_address - start
+                if idx < 0 or idx >= len(bits):
+                    return states, f"{item.label}:读 {item.x_name} 失败"
+                states[item.key] = bool(bits[idx])
+            return states, ""
 
     def _write_d_real(self, d_address: int, value: float) -> Result:
-        if not self.connected:
-            return False, "PLC 未连接"
-        regs = _float_to_registers(value)
-        resp = mb.write_registers(
-            self._client, d_address, regs, device_id=cfg.MODBUS_SLAVE_ID
-        )
-        if resp.isError():
-            return False, f"写 D{d_address} 失败"
-        return True, ""
+        with self._io_lock:
+            if not self.connected:
+                return False, "PLC 未连接"
+            regs = _float_to_registers(value)
+            resp = mb.write_registers(
+                self._client, d_address, regs, device_id=cfg.MODBUS_SLAVE_ID
+            )
+            if resp.isError():
+                return False, f"写 D{d_address} 失败"
+            return True, ""
 
     def _read_d_real(self, d_address: int) -> Tuple[Optional[float], str]:
-        if not self.connected:
-            return None, "PLC 未连接"
-        resp = mb.read_holding_registers(
-            self._client, d_address, count=2, device_id=cfg.MODBUS_SLAVE_ID
-        )
-        if resp.isError() or not resp.registers or len(resp.registers) < 2:
-            return None, f"读 D{d_address} 失败"
-        return _registers_to_float(resp.registers[:2]), ""
+        with self._io_lock:
+            if not self.connected:
+                return None, "PLC 未连接"
+            resp = mb.read_holding_registers(
+                self._client, d_address, count=2, device_id=cfg.MODBUS_SLAVE_ID
+            )
+            if resp.isError() or not resp.registers or len(resp.registers) < 2:
+                return None, f"读 D{d_address} 失败"
+            return _registers_to_float(resp.registers[:2]), ""
 
-    def _pulse_m_until(
+    def _write_d_word(self, d_address: int, value: int) -> Result:
+        with self._io_lock:
+            if not self.connected:
+                return False, "PLC 未连接"
+            resp = mb.write_registers(
+                self._client,
+                d_address,
+                [int(value) & 0xFFFF],
+                device_id=cfg.MODBUS_SLAVE_ID,
+            )
+            if resp.isError():
+                return False, f"写 D{d_address} 失败"
+            return True, ""
+
+    def _read_d_word(self, d_address: int) -> Tuple[Optional[int], str]:
+        with self._io_lock:
+            if not self.connected:
+                return None, "PLC 未连接"
+            resp = mb.read_holding_registers(
+                self._client, d_address, count=1, device_id=cfg.MODBUS_SLAVE_ID
+            )
+            if resp.isError() or not resp.registers:
+                return None, f"读 D{d_address} 失败"
+            return int(resp.registers[0]) & 0xFFFF, ""
+
+    def _pulse_d_bit_until(
         self,
-        cmd_m: int,
-        done_m: int,
+        d_cmd: int,
+        cmd_bit: int,
+        d_sts: int,
+        sts_bit: int,
         *,
         timeout_s: float,
         poll_interval_s: float,
+        require_moving_s: float = 0.0,
     ) -> Result:
-        ok, detail = self._write_coil(cmd_m, False)
+        """命令字置 bit=1，等到状态字对应 bit=1 后清 0。发令前整字清零。"""
+        mask = 1 << cmd_bit
+        sts_mask = 1 << sts_bit
+        alarm_mask = 1 << cfg.STS_BIT_ALARM
+        moving_mask = 1 << cfg.STS_BIT_MOVING
+
+        ok, detail = self._write_d_word(d_cmd, 0)
         if not ok:
             return False, detail
+        # HomeDone/MoveDone 随命令撤销而清；PowerOk 使能后保持，不能等其变 0
+        if sts_bit in (cfg.STS_BIT_HOME_DONE, cfg.STS_BIT_MOVE_DONE):
+            clear_deadline = time.monotonic() + 1.0
+            while time.monotonic() < clear_deadline:
+                sts, err = self._read_d_word(d_sts)
+                if err:
+                    return False, err
+                if sts is not None and (sts & sts_mask) == 0:
+                    break
+                time.sleep(poll_interval_s)
+            else:
+                return False, "PLC 完成位未清除，请点「停止」后重试"
+
         time.sleep(0.05)
-        ok, detail = self._write_coil(cmd_m, True)
+        ok, detail = self._write_d_word(d_cmd, mask)
         if not ok:
             return False, detail
 
         deadline = time.monotonic() + timeout_s
+        moving_deadline = (
+            time.monotonic() + require_moving_s if require_moving_s > 0 else None
+        )
+        saw_activity = False
+        cancelled = False
         try:
             while time.monotonic() < deadline:
                 if self._motion_cancelled():
+                    cancelled = True
+                    # Busy 中仅清 CmdMove 不会停轴，必须发 CmdStop → MC_Stop
+                    self._write_d_word(d_cmd, 1 << cfg.CMD_BIT_STOP)
                     return False, "已停止"
-                done, err = self._read_coil(done_m)
+                sts, err = self._read_d_word(d_sts)
                 if err:
                     return False, err
-                if done:
+                if sts is not None and (sts & alarm_mask) != 0:
+                    return False, "轴报警，请点「停止」或在 InoProShop 轴复位后再试"
+                if sts is not None and (sts & sts_mask) != 0:
                     return True, "完成"
+                if sts is not None and (sts & moving_mask) != 0:
+                    saw_activity = True
+                if (
+                    moving_deadline is not None
+                    and not saw_activity
+                    and time.monotonic() >= moving_deadline
+                ):
+                    return False, "PLC 未启动该动作（无运动反馈），请检查轴状态与任务配置"
                 time.sleep(poll_interval_s)
             return False, "PLC 动作超时"
         finally:
-            self._write_coil(cmd_m, False)
+            # 停止中勿清零，否则会抹掉 CmdStop，PLC 可能采不到上升沿
+            if not cancelled and not self._motion_cancelled():
+                self._write_d_word(d_cmd, 0)
 
     def read_axis_status(self, axis: AxisMap) -> Tuple[AxisRuntimeStatus, str]:
         status = AxisRuntimeStatus()
@@ -174,22 +239,14 @@ class SolidDoserMotionModbusClient:
         if not err and target is not None:
             status.target_position = target
 
-        for attr, m_addr in (
-            ("datum_ok", axis.m_status_homed),
-            ("moving", axis.m_status_moving),
-            ("alarm", axis.m_status_alarm),
-        ):
-            val, err = self._read_coil(m_addr)
-            if err:
-                errors.append(err)
-            elif val is not None:
-                setattr(status, attr, val)
-
-        power_ok, err = self._read_coil(axis.m_status_power_ok)
+        sts, err = self._read_d_word(axis.d_sts)
         if err:
             errors.append(err)
-        elif power_ok is not None:
-            status.servo_enabled = power_ok
+        elif sts is not None:
+            status.servo_enabled = (sts & (1 << cfg.STS_BIT_POWER_OK)) != 0
+            status.datum_ok = (sts & (1 << cfg.STS_BIT_HOMED)) != 0
+            status.moving = (sts & (1 << cfg.STS_BIT_MOVING)) != 0
+            status.alarm = (sts & (1 << cfg.STS_BIT_ALARM)) != 0
 
         if errors:
             return status, "；".join(errors)
@@ -204,36 +261,39 @@ class SolidDoserMotionModbusClient:
             if err:
                 errors.append(f"{axis.label}:{err}")
         for do_item in cfg.DO_OUTPUTS:
-            state, err = self._read_coil(do_item.m_coil)
+            raw, err = self._read_d_word(do_item.d_register)
             if err:
                 errors.append(f"{do_item.label}:{err}")
-            elif state is not None:
-                device.do_states[do_item.key] = state
-        for di_item in cfg.DI_INPUTS:
-            state, err = self._read_discrete_input(di_item.x_address)
-            if err:
-                errors.append(f"{di_item.label}:{err}")
-            elif state is not None:
-                device.di_states[di_item.key] = state
+            elif raw is not None:
+                device.do_states[do_item.key] = raw != 0
+        di_states, di_err = self.read_di_states()
+        device.di_states.update(di_states)
+        if di_err:
+            errors.append(di_err)
         if errors:
             return device, "；".join(errors)
         return device, ""
 
     def servo_on(self, axis: AxisMap) -> Result:
-        return self._pulse_m_until(
-            axis.m_cmd_power,
-            axis.m_status_power_ok,
+        return self._pulse_d_bit_until(
+            axis.d_cmd,
+            cfg.CMD_BIT_POWER,
+            axis.d_sts,
+            cfg.STS_BIT_POWER_OK,
             timeout_s=cfg.POWER_ON_TIMEOUT_S,
             poll_interval_s=cfg.POLL_INTERVAL_S,
         )
 
     def go_datum(self, axis: AxisMap) -> Result:
         """找外部基准点（PLC CmdHome → MC_Home）。"""
-        return self._pulse_m_until(
-            axis.m_cmd_home,
-            axis.m_status_home_done,
+        return self._pulse_d_bit_until(
+            axis.d_cmd,
+            cfg.CMD_BIT_HOME,
+            axis.d_sts,
+            cfg.STS_BIT_HOME_DONE,
             timeout_s=cfg.DATUM_TIMEOUT_S,
             poll_interval_s=cfg.POLL_INTERVAL_S,
+            require_moving_s=3.0,
         )
 
     def move_absolute(
@@ -245,9 +305,11 @@ class SolidDoserMotionModbusClient:
         ok, detail = self._write_d_real(axis.d_velocity, velocity)
         if not ok:
             return False, detail
-        return self._pulse_m_until(
-            axis.m_cmd_move,
-            axis.m_status_move_done,
+        return self._pulse_d_bit_until(
+            axis.d_cmd,
+            cfg.CMD_BIT_MOVE,
+            axis.d_sts,
+            cfg.STS_BIT_MOVE_DONE,
             timeout_s=cfg.COMMAND_TIMEOUT_S,
             poll_interval_s=cfg.POLL_INTERVAL_S,
         )
@@ -256,23 +318,39 @@ class SolidDoserMotionModbusClient:
         ok, detail = self._write_d_real(axis.d_velocity, velocity)
         if not ok:
             return False, detail
-        return self._pulse_m_until(
-            axis.m_cmd_move,
-            axis.m_status_move_done,
+        return self._pulse_d_bit_until(
+            axis.d_cmd,
+            cfg.CMD_BIT_MOVE,
+            axis.d_sts,
+            cfg.STS_BIT_MOVE_DONE,
             timeout_s=cfg.COMMAND_TIMEOUT_S,
             poll_interval_s=cfg.POLL_INTERVAL_S,
         )
 
     def stop(self, axis: AxisMap) -> Result:
-        ok, detail = self._write_coil(axis.m_cmd_stop, True)
+        """写 CmdStop 并保持到轴不再 Moving，避免与定位 finally 清零竞态。"""
+        mask = 1 << cfg.CMD_BIT_STOP
+        moving_mask = 1 << cfg.STS_BIT_MOVING
+        ok, detail = self._write_d_word(axis.d_cmd, mask)
         if not ok:
             return False, detail
-        time.sleep(0.1)
-        self._write_coil(axis.m_cmd_stop, False)
-        return True, "已发送停止指令"
+        # 至少保持一个 PLC 周期，供 R_TRIG 采到上升沿
+        time.sleep(max(0.05, cfg.POLL_INTERVAL_S))
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            # 若定位线程 finally 误清命令字，这里反复置位
+            self._write_d_word(axis.d_cmd, mask)
+            sts, err = self._read_d_word(axis.d_sts)
+            if err:
+                break
+            if sts is not None and (sts & moving_mask) == 0:
+                break
+            time.sleep(cfg.POLL_INTERVAL_S)
+        self._write_d_word(axis.d_cmd, 0)
+        return True, "已停止"
 
     def set_do_output(self, do_item, on: bool) -> Result:
-        ok, detail = self._write_coil(do_item.m_coil, on)
+        ok, detail = self._write_d_word(do_item.d_register, 1 if on else 0)
         if not ok:
             return False, detail
         state = "开启" if on else "关闭"
