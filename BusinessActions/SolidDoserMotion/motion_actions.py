@@ -227,7 +227,7 @@ def motion_lift_go_named(
 
 
 def motion_powder_go_origin(ctx: SolidDoserMotionContext) -> ActionResult:
-    """承粉电机运行至命名原点位置（0 mm）。须已使能且已回基准点。"""
+    """承粉电机运行至命名原点位置（0°）。须已使能且已回基准点。"""
     return motion_powder_go_named(ctx, "origin")
 
 

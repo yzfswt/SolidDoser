@@ -334,7 +334,12 @@ END_IF;
 StatusHomed := bHomedLatch;
 
 rTrigMove(CLK := CmdMove);
-rVelUse := SEL(Velocity > 0.0, Velocity, 10.0);
+(* SEL(G, IN0, IN1)：G=FALSE→IN0，G=TRUE→IN1；勿写反，否则正速度恒为 10 *)
+IF Velocity > 0.0 THEN
+    rVelUse := Velocity;
+ELSE
+    rVelUse := 10.0;
+END_IF;
 IF rTrigMove.Q AND StatusPowerOk AND NOT bAlarmLatch THEN
     StatusMoveDone := FALSE;
     bHomePending := FALSE;

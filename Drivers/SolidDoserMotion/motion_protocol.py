@@ -162,6 +162,7 @@ class SolidDoserMotionModbusClient:
         timeout_s: float,
         poll_interval_s: float,
         require_moving_s: float = 0.0,
+        accept_moving: bool = False,
     ) -> Result:
         """命令字置 bit=1，等到状态字对应 bit=1 后清 0。发令前整字清零。"""
         mask = 1 << cmd_bit
@@ -180,6 +181,13 @@ class SolidDoserMotionModbusClient:
                 if err:
                     return False, err
                 if sts is not None and (sts & sts_mask) == 0:
+                    break
+                # 搅拌等连续速度轴：已在转时 MoveDone 保持为 1，不必等清零
+                if (
+                    accept_moving
+                    and sts is not None
+                    and (sts & moving_mask) != 0
+                ):
                     break
                 time.sleep(poll_interval_s)
             else:
@@ -210,6 +218,8 @@ class SolidDoserMotionModbusClient:
                     return False, "轴报警，请点「停止」或在 InoProShop 轴复位后再试"
                 if sts is not None and (sts & sts_mask) != 0:
                     return True, "完成"
+                if accept_moving and sts is not None and (sts & moving_mask) != 0:
+                    return True, "已启动"
                 if sts is not None and (sts & moving_mask) != 0:
                     saw_activity = True
                 if (
@@ -318,6 +328,12 @@ class SolidDoserMotionModbusClient:
         ok, detail = self._write_d_real(axis.d_velocity, velocity)
         if not ok:
             return False, detail
+        sts, err = self._read_d_word(axis.d_sts)
+        if err:
+            return False, err
+        moving_mask = 1 << cfg.STS_BIT_MOVING
+        if sts is not None and (sts & moving_mask) != 0:
+            return True, "已在运行（已更新速度）"
         return self._pulse_d_bit_until(
             axis.d_cmd,
             cfg.CMD_BIT_MOVE,
@@ -325,6 +341,7 @@ class SolidDoserMotionModbusClient:
             cfg.STS_BIT_MOVE_DONE,
             timeout_s=cfg.COMMAND_TIMEOUT_S,
             poll_interval_s=cfg.POLL_INTERVAL_S,
+            accept_moving=True,
         )
 
     def stop(self, axis: AxisMap) -> Result:

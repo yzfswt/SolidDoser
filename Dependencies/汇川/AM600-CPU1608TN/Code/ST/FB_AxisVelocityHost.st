@@ -49,7 +49,6 @@ VAR
     rTrigStop       : R_TRIG;
     bEnable         : BOOL;
     bRunLatch       : BOOL;
-    bStartVel       : BOOL;
     bInVelocity     : BOOL;
     rVelUse         : REAL;
     nDirection      : INT;
@@ -88,11 +87,9 @@ IF fbStop.Done OR fbStop.Error THEN
 END_IF;
 
 rTrigMove(CLK := CmdMove);
-bStartVel := FALSE;
-IF rTrigMove.Q AND (Velocity <> 0.0) THEN
+IF rTrigMove.Q AND (Velocity <> 0.0) AND StatusPowerOk THEN
     bRunLatch := TRUE;
     bInVelocity := FALSE;
-    bStartVel := TRUE;
 END_IF;
 
 IF Velocity < 0.0 THEN
@@ -103,9 +100,10 @@ ELSE
     nDirection := 1;
 END_IF;
 
+(* MC_MoveVelocity 须保持 Execute=TRUE 才能连续转；勿单周期脉冲 *)
 fbMoveVel(
     Axis := Axis,
-    Execute := bStartVel,
+    Execute := bRunLatch AND NOT fbStop.Busy,
     Velocity := rVelUse,
     Acceleration := Accel,
     Deceleration := Decel,

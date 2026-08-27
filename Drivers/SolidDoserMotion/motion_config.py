@@ -125,7 +125,7 @@ def lift_position_mm(key: str) -> float:
     return LIFT_POSITION_BY_KEY[key].position_mm
 
 
-# 承粉轴命名位置（mm）：原点 / 空闲 / 工作
+# 承粉轴命名位置（°）：原点 / 空闲 / 工作
 POWDER_AXIS_KEY = "powder"
 
 
@@ -148,7 +148,7 @@ POWDER_POSITION_BY_KEY: Dict[str, PowderNamedPosition] = {
 
 
 def powder_position_mm(key: str) -> float:
-    """按命名位置 key 取目标行程（mm）。"""
+    """按命名位置 key 取目标角度（°）。"""
     if key not in POWDER_POSITION_BY_KEY:
         raise KeyError(f"未知承粉位置: {key}")
     return POWDER_POSITION_BY_KEY[key].position_mm
@@ -230,7 +230,7 @@ AXES: Tuple[AxisMap, ...] = (
         d_sts=231,     # %MW231 Sts_Hori_W
         pos_min=0.0,
         pos_max=2000.0,
-        vel_default=100.0,
+        vel_default=60.0,
         unit="mm",
     ),
     _axis_block(
@@ -242,7 +242,7 @@ AXES: Tuple[AxisMap, ...] = (
         d_sts=237,
         pos_min=0.0,
         pos_max=360.0,
-        vel_default=30.0,
+        vel_default=60.0,
         unit="°",
     ),
     _axis_block(
@@ -254,7 +254,7 @@ AXES: Tuple[AxisMap, ...] = (
         d_sts=233,
         pos_min=0.0,
         pos_max=500.0,
-        vel_default=50.0,
+        vel_default=20.0,
         unit="mm",
     ),
     _axis_block(
@@ -278,8 +278,8 @@ AXES: Tuple[AxisMap, ...] = (
         d_sts=239,
         pos_min=0.0,
         pos_max=200.0,
-        vel_default=20.0,
-        unit="mm",
+        vel_default=60.0,
+        unit="°",
     ),
 )
 
