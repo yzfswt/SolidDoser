@@ -74,6 +74,10 @@ fbIdx(
     CmdStop := (Cmd_Idx_W AND 16#0008) <> 0,
     PosTarget := Pos_Idx_Target,
     Velocity := Vel_Idx,
+    (* 在线调试 Accel/Decel≈5 时误差极小；上位机路径勿用过大加减速 *)
+    Accel := 50.0,
+    Decel := 50.0,
+    Jerk := 200.0,
     StatusPowerOk => Sts_Idx_PowerOk,
     StatusHomeDone => Sts_Idx_HomeDone,
     StatusMoveDone => Sts_Idx_MoveDone,

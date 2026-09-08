@@ -6,6 +6,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -31,8 +32,7 @@ from BusinessActions.SartoriusBalance.balance_actions import (
 )
 from BusinessActions.SartoriusBalance.balance_context import BalanceContext
 from BusinessActions.SolidDoserMotion.motion_actions import (
-    indexing_disc_step_backward,
-    indexing_disc_step_forward,
+    indexing_disc_go_to_station,
     motion_axis_go_datum,
     motion_axis_move_abs,
     motion_axis_servo_on,
@@ -50,7 +50,11 @@ from Drivers.SartoriusBalance import balance_config as balance_cfg
 from Drivers.SerialServer import ut_6801a_config as serial_cfg
 from Drivers.SolidDoserMotion import motion_config as motion_cfg
 from Drivers.SolidDoserMotion.motion_config import AxisMap, DiInputMap, DoOutputMap
-from Drivers.SolidDoserMotion.motion_driver import get_motion_driver
+from Drivers.SolidDoserMotion.indexing_disc import get_indexing_disc
+from Drivers.SolidDoserMotion.motion_driver import (
+    apply_status_to_state,
+    get_motion_driver,
+)
 from UIInteraction.ParameterManagement.ParameterStorage import ParameterStorage
 
 ActionFn = Callable[[SolidDoserMotionContext], Tuple[bool, str]]
@@ -66,7 +70,7 @@ _FIELD_LABEL_WIDTH = 28
 _TARGET_INPUT_MIN_WIDTH = 56
 _VELOCITY_INPUT_MIN_WIDTH = 52
 _AXIS_STATUS_MIN_WIDTH = 120
-# 按钮列：使能 / 回基准点 / 回原点 / 定位 / 前进 / 后退 / 停止
+# 按钮列：使能 / 回基准点 / 回原点 / 定位 / 工位下拉 / 分度 / 停止
 # 目标、速度插在「回原点」与「定位」之间
 _AXIS_BTN_COLS = 7
 _AXIS_BTN_MIN_WIDTH = 76  # 保证「回基准点」四字完整显示
@@ -132,6 +136,22 @@ QLineEdit {
 QLineEdit:focus {
     border: 1px solid #3b82f6;
 }
+QComboBox {
+    font-size: 12px;
+    padding: 2px 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
+    min-height: 30px;
+    max-height: 30px;
+}
+QComboBox:focus {
+    border: 1px solid #3b82f6;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 18px;
+}
 QPushButton {
     font-size: 12px;
     padding: 2px 10px;
@@ -194,17 +214,19 @@ class _MotionActionThread(QThread):
 
 
 class _DiPollThread(QThread):
-    polled = Signal(dict, str)
+    """后台轮询 PLC 全状态（含轴位置与 DI），避免界面只重绘缓存。"""
+
+    polled = Signal(object, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
     def run(self) -> None:
         try:
-            states, err = get_motion_driver().read_di_states()
-            self.polled.emit(states, err)
+            status, err = get_motion_driver().read_status()
+            self.polled.emit(status, err)
         except Exception as exc:
-            self.polled.emit({}, str(exc))
+            self.polled.emit(None, str(exc))
 
 
 class _AxisActionThread(QThread):
@@ -313,8 +335,14 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._di_timer = QTimer(self)
         self._di_timer.setInterval(400)
         self._di_timer.timeout.connect(self._poll_di)
+        # 自动页使能等会更新共用 ParameterStorage；调试页定时重绘，
+        # 实时轴位置由 _poll_di → read_status 从 PLC 拉取。
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(300)
+        self._status_timer.timeout.connect(self._refresh_status)
         self._buttons: List[QPushButton] = []
         self._stop_buttons: List[QPushButton] = []
+        self._indexing_station_combo: Optional[QComboBox] = None
         self._status_label: Optional[QLabel] = None
         self._log_label: Optional[QLabel] = None
         self._axis_status_labels: Dict[str, QLabel] = {}
@@ -330,7 +358,11 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._balance_result_label: Optional[QLabel] = None
         self._param_storage: Optional[ParameterStorage] = None
         self._di_closing = False
+        self._action_log_handler: Optional[Callable[[str], None]] = None
         self._build_ui()
+
+    def set_action_log_handler(self, handler: Optional[Callable[[str], None]]) -> None:
+        self._action_log_handler = handler
 
     def bind_parameter_storage(self, param_storage: ParameterStorage) -> None:
         self._param_storage = param_storage
@@ -347,11 +379,17 @@ class SolidDoserMotionDebugTabWidget(QWidget):
 
     def hideEvent(self, event) -> None:
         self._di_timer.stop()
+        self._status_timer.stop()
         super().hideEvent(event)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         if self._ctx is not None and not self._di_closing:
+            # 从自动页切回时，先同步共用状态到界面（使能/连接等）
+            self._refresh_status()
+            self._refresh_scanner_status()
+            self._refresh_balance_status()
+            self._status_timer.start()
             self._poll_di()
             self._di_timer.start()
 
@@ -362,6 +400,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
     def shutdown_di_poll(self) -> None:
         """主窗口关闭时调用，避免轮询线程未结束导致进程异常退出。"""
         self._di_closing = True
+        self._status_timer.stop()
         self._stop_di_poll(wait=True)
 
     def _stop_di_poll(self, *, wait: bool = False) -> None:
@@ -427,10 +466,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         bottom.addWidget(self._build_scanner_card(), 1)
         bottom.addWidget(self._build_balance_card(), 1)
         root.addLayout(bottom)
-
-        self._log_label = QLabel("日志：—")
-        self._log_label.setObjectName("Result")
-        root.addWidget(self._log_label)
+        # 操作日志在主窗口底部共用栏显示（三页可见）
         root.addStretch(1)
 
     def _build_motion_card(self) -> QFrame:
@@ -582,7 +618,7 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         vel_wrap.addWidget(vel_input, 1)
         layout.addWidget(vel_box, 2)
 
-        # 后段按钮：定位 / 前进 / 后退 / 停止
+        # 后段按钮：定位 / 工位下拉+分度（仅分度轴）/ 停止
         post_box, post_actions = _new_actions_box()
         move_label = "启动" if is_stir_axis else "定位"
         btn_move = _make_axis_btn(move_label, primary=True)
@@ -595,23 +631,18 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         _add_axis_btn_slot(post_actions, btn_move)
 
         if is_indexing_axis:
-            btn_fwd = _make_axis_btn("前进")
-            btn_fwd.clicked.connect(
-                lambda _c=False: self._run_indexing_disc_action(
-                    indexing_disc_step_forward, "分度盘前进"
-                )
-            )
-            self._buttons.append(btn_fwd)
-            _add_axis_btn_slot(post_actions, btn_fwd)
+            station_combo = QComboBox()
+            for station in motion_cfg.iter_indexing_stations():
+                station_combo.addItem(f"工位{station}", station)
+            station_combo.setMinimumWidth(_AXIS_BTN_MIN_WIDTH)
+            station_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            self._indexing_station_combo = station_combo
+            _add_axis_btn_slot(post_actions, station_combo)
 
-            btn_back = _make_axis_btn("后退")
-            btn_back.clicked.connect(
-                lambda _c=False: self._run_indexing_disc_action(
-                    indexing_disc_step_backward, "分度盘后退"
-                )
-            )
-            self._buttons.append(btn_back)
-            _add_axis_btn_slot(post_actions, btn_back)
+            btn_index = _make_axis_btn("分度", primary=True)
+            btn_index.clicked.connect(lambda _c=False: self._run_indexing_go_station())
+            self._buttons.append(btn_index)
+            _add_axis_btn_slot(post_actions, btn_index)
         else:
             _add_axis_btn_slot(post_actions, None)
             _add_axis_btn_slot(post_actions, None)
@@ -816,8 +847,9 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             flags.append("报警")
         if axis_key == _INDEXING_AXIS_KEY:
             station = self._ctx.motion.indexing_station
+            rotate = "可转" if self._ctx.motion.indexing_rotation_allowed else "禁转"
             return (
-                f"{' '.join(flags)}  工位{station} "
+                f"{' '.join(flags)}  {rotate}  工位{station} "
                 f"{st.actual_position:g}{axis.unit}"
             )
         return f"{' '.join(flags)}  {st.actual_position:g}{axis.unit}"
@@ -938,19 +970,24 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._di_thread.polled.connect(self._on_di_polled)
         self._di_thread.start()
 
-    def _on_di_polled(self, states: dict, err: str) -> None:
+    def _on_di_polled(self, status, err: str) -> None:
         self._di_thread = None
         if self._ctx is None:
             return
-        if states:
-            self._ctx.motion.di_states.update(states)
-            self._update_di_labels()
-        if err and self._log_label is not None and self._thread is None:
-            self._log_label.setText(f"日志：失败 · 读传感器 · {err}")
+        if status is not None:
+            apply_status_to_state(self._ctx.motion, status)
+            self._ctx.motion.set_indexing_station(
+                get_indexing_disc().current_station
+            )
+            self._refresh_status()
+        if err and self._thread is None:
+            self._append_log(False, err, "读状态")
 
     def _set_buttons_enabled(self, enabled: bool) -> None:
         for btn in self._buttons:
             btn.setEnabled(enabled)
+        if self._indexing_station_combo is not None:
+            self._indexing_station_combo.setEnabled(enabled)
         # 运动过程中停止必须可点
         for btn in self._stop_buttons:
             btn.setEnabled(True)
@@ -978,10 +1015,12 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._append_log(ok, msg, action_name)
 
     def _append_log(self, ok: bool, msg: str, action_name: str) -> None:
-        if self._log_label is None:
-            return
         prefix = "成功" if ok else "失败"
-        self._log_label.setText(f"日志：{prefix} · {action_name} · {msg}")
+        text = f"日志：{prefix} · {action_name} · {msg}"
+        if self._log_label is not None:
+            self._log_label.setText(text)
+        if self._action_log_handler is not None:
+            self._action_log_handler(text)
 
     def _on_action_finished(self, ok: bool, msg: str, action_name: str) -> None:
         self._thread = None
@@ -1048,6 +1087,25 @@ class SolidDoserMotionDebugTabWidget(QWidget):
         self._thread.finished.connect(self._on_action_finished)
         self._thread.start()
 
+    def _run_indexing_go_station(self) -> None:
+        if self._ctx is None or self._thread is not None:
+            return
+        if self._reject_if_system_busy():
+            return
+        combo = self._indexing_station_combo
+        if combo is None:
+            return
+        station = int(combo.currentData())
+        self._sync_axis_params(_INDEXING_AXIS_KEY)
+        self._set_buttons_enabled(False)
+        self._thread = _MotionActionThread(
+            lambda ctx, s=station: indexing_disc_go_to_station(ctx, s),
+            self._ctx,
+            f"分度盘 → 工位 {station}",
+        )
+        self._thread.finished.connect(self._on_action_finished)
+        self._thread.start()
+
     def _run_lift_go_origin(self) -> None:
         if self._ctx is None or self._thread is not None:
             return
@@ -1075,21 +1133,6 @@ class SolidDoserMotionDebugTabWidget(QWidget):
             self._ctx,
             "承粉电机 回原点",
         )
-        self._thread.finished.connect(self._on_action_finished)
-        self._thread.start()
-
-    def _run_indexing_disc_action(
-        self,
-        fn: Callable[[SolidDoserMotionContext], Tuple[bool, str]],
-        action_name: str,
-    ) -> None:
-        if self._ctx is None or self._thread is not None:
-            return
-        if self._reject_if_system_busy():
-            return
-        self._sync_axis_params(_INDEXING_AXIS_KEY)
-        self._set_buttons_enabled(False)
-        self._thread = _MotionActionThread(fn, self._ctx, action_name)
         self._thread.finished.connect(self._on_action_finished)
         self._thread.start()
 

@@ -26,8 +26,8 @@ VAR_INPUT
     CmdStop         : BOOL;
     PosTarget       : REAL;
     Velocity        : REAL;
-    Accel           : REAL := 500.0;
-    Decel           : REAL := 500.0;
+    Accel           : REAL := 100.0;
+    Decel           : REAL := 100.0;
     Jerk            : REAL := 0.0;
     bUseControllerHoming : BOOL := FALSE;
     bHomeSwitch     : BOOL := FALSE;
@@ -379,7 +379,7 @@ IF NOT CmdMove THEN
     END_IF;
 END_IF;
 
-bReadPosEn := NOT bHomeBusy AND NOT fbMove.Busy AND NOT fbStop.Busy AND NOT bHomePending;
+bReadPosEn := TRUE; (* 运动中也读实际位置，便于上位机监控与到位校验 *)
 fbReadPos(Axis := Axis, Enable := bReadPosEn);
 IF fbReadPos.Valid THEN
     PosActual := TO_REAL(fbReadPos.Position);

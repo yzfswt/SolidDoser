@@ -110,7 +110,13 @@ class ButtonActionManager:
 
     def _logged_call(self, description: str, fn, *args, **kwargs):
         get_action_logger().record(description)
-        return fn(*args, **kwargs)
+        try:
+            result = fn(*args, **kwargs)
+            self.main_window.set_action_log(description)
+            return result
+        except Exception as exc:  # noqa: BLE001
+            self.main_window.set_action_log(f"失败 · {description} · {exc}")
+            raise
 
     def setup_button_connections(self):
         self.main_window.btn_import_process.clicked.connect(
@@ -139,6 +145,7 @@ class ButtonActionManager:
         self.main_window.label_progress.setText("执行进度: 0/0")
         self.main_window.progress_bar.setRange(0, 1)
         self.main_window.progress_bar.setValue(0)
+        self.main_window.set_action_log("工艺流程执行中…")
 
         self.process_execution_thread = ProcessExecutionThread(self.device_manager)
         self.process_execution_thread.status.connect(self._on_execution_status)
@@ -153,6 +160,7 @@ class ButtonActionManager:
 
     def _on_execution_status(self, message):
         print(f"📋 {message}")
+        self.main_window.set_action_log(message)
 
     def _on_process_progress(self, current: int, total: int):
         if total <= 0:
@@ -172,6 +180,7 @@ class ButtonActionManager:
         self.param_storage.process_execution_filename = filename or ""
         self.param_storage.process_execution_total_steps = total
         self.param_storage.process_execution_current_step = 0
+        self.main_window.set_action_log(f"开始执行工艺文件：{filename}")
 
     def _on_execution_finished(self, message):
         print(f"✅ {message}")
@@ -179,6 +188,7 @@ class ButtonActionManager:
         if total > 0:
             self.main_window.label_progress.setText(f"执行进度: {total}/{total}")
             self.main_window.progress_bar.setValue(total)
+        self.main_window.set_action_log(f"成功 · {message}")
         self.param_storage.is_system_busy = False
         self._clear_process_execution_state()
 
@@ -187,6 +197,7 @@ class ButtonActionManager:
         self.main_window.label_progress.setText("执行进度: 0/0")
         self.main_window.progress_bar.setRange(0, 1)
         self.main_window.progress_bar.setValue(0)
+        self.main_window.set_action_log(f"失败 · {message}")
         self.ui_feedback.show_error("执行错误", message)
         self.param_storage.is_system_busy = False
         self._clear_process_execution_state()
@@ -195,6 +206,7 @@ class ButtonActionManager:
         self.main_window.label_progress.setText("执行进度: 0/0")
         self.main_window.progress_bar.setRange(0, 1)
         self.main_window.progress_bar.setValue(0)
+        self.main_window.set_action_log("工艺流程已中断")
         self.param_storage.is_system_busy = False
         self._clear_process_execution_state()
 

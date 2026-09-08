@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCloseEvent, QFont
+from typing import Optional
 
 from Common.ActionLogger import get_action_logger
 
@@ -114,6 +115,14 @@ QHeaderView::section {
     border: none;
     border-bottom: 1px solid #e2e8f0;
 }
+QLabel#ActionLog {
+    font-size: 12px;
+    color: #334155;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 6px 10px;
+}
 """
 
 
@@ -122,6 +131,7 @@ class MainUI(QMainWindow):
         super().__init__()
         self.solid_doser_auto_tab_widget = None
         self.solid_doser_motion_debug_tab_widget = None
+        self.label_log: Optional[QLabel] = None
         self.setMinimumSize(1100, 720)
         self.resize(1180, 800)
         self.init_ui()
@@ -133,11 +143,21 @@ class MainUI(QMainWindow):
         super().closeEvent(event)
         get_action_logger().persist()
 
+    def set_action_log(self, text: str) -> None:
+        """三个页签共用的底部日志（流程导入 / 自动 / 调试）。"""
+        if self.label_log is None:
+            return
+        msg = (text or "").strip() or "—"
+        if not msg.startswith("日志"):
+            msg = f"日志：{msg}"
+        self.label_log.setText(msg)
+
     def init_ui(self):
         self.setStyleSheet(_APP_STYLE)
         central = QWidget()
         root_layout = QVBoxLayout(central)
         root_layout.setContentsMargins(12, 12, 12, 12)
+        root_layout.setSpacing(8)
         tabs = QTabWidget()
 
         # 自动在调试之前
@@ -165,7 +185,14 @@ class MainUI(QMainWindow):
                 layout.addWidget(self.solid_doser_motion_debug_tab_widget)
             tabs.addTab(tab, title)
 
-        root_layout.addWidget(tabs)
+        root_layout.addWidget(tabs, 1)
+
+        self.label_log = QLabel("日志：—")
+        self.label_log.setObjectName("ActionLog")
+        self.label_log.setWordWrap(True)
+        self.label_log.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        root_layout.addWidget(self.label_log)
+
         self.setCentralWidget(central)
 
     def _build_process_tab(self, layout: QVBoxLayout) -> None:
@@ -218,9 +245,13 @@ class MainUI(QMainWindow):
     def bind_solid_doser_motion_debug(self, param_storage) -> None:
         if self.solid_doser_motion_debug_tab_widget is not None:
             self.solid_doser_motion_debug_tab_widget.bind_parameter_storage(param_storage)
+            self.solid_doser_motion_debug_tab_widget.set_action_log_handler(
+                self.set_action_log
+            )
 
     def bind_solid_doser(self, param_storage) -> None:
         """绑定 SolidDoser 自动页 + 调试页到同一 ParameterStorage。"""
         self.bind_solid_doser_motion_debug(param_storage)
         if self.solid_doser_auto_tab_widget is not None:
             self.solid_doser_auto_tab_widget.bind_parameter_storage(param_storage)
+            self.solid_doser_auto_tab_widget.set_action_log_handler(self.set_action_log)

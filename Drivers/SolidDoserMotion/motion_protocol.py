@@ -1,7 +1,6 @@
 """SolidDoser 主运动 Modbus TCP（AM600-CPU1608TN M/D 映射）。"""
 from __future__ import annotations
 
-import logging
 import struct
 import threading
 import time
@@ -11,8 +10,6 @@ from Drivers import plc_modbus_compat as mb
 from Drivers.SolidDoserMotion import motion_config as cfg
 from Drivers.SolidDoserMotion.motion_config import AxisMap, DoOutputMap
 from Drivers.SolidDoserMotion.motion_status import AxisRuntimeStatus, MotionDeviceStatus
-
-logger = logging.getLogger("soliddoser.motion")
 
 Result = Tuple[bool, str]
 

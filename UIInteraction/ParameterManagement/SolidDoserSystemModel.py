@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict
+from typing import Dict, List
 
 
 class SystemRunState(Enum):
@@ -13,10 +13,19 @@ class SystemRunState(Enum):
     ENABLING = "使能中"
     HOMING = "回基准点中"
     GOING_ORIGIN = "回原点中"
+    DEVICE_INITING = "设备初始化中"
     INITIALIZING = "初始化中"
     FEEDING_BOTTLE = "试剂瓶进料中"
-    DOSING = "加样中"
+    DOSING = "加料中"
     DISCHARGING_BOTTLE = "试剂瓶出料中"
+
+
+@dataclass
+class DoseItem:
+    """单次加料条目：条码 + 目标重量(mg)。"""
+
+    material_id: str = ""
+    weight_mg: float = 0.0
 
 
 @dataclass
@@ -32,13 +41,12 @@ class SolidDoserSystemState:
     # 常用系统标识位（由系统动作结束后根据轴状态刷新）
     enabled_ok: bool = False  # 已使能（全部电机）
     datum_ok: bool = False  # 已回基准点（定位相关轴）
-    origin_ok: bool = False  # 已回原点（定位相关轴在命名原点）
+    origin_ok: bool = False  # 已回原点（水平/升降/承粉在命名原点；分度在任一工位）
     materials_ok: bool = False  # 已初始化（8 工位物料表完整有效）
-    # 初始化结果：工位 0～7 → 物料条码；失败或作废时清空
+    # 初始化结果：工位 1～8 → 物料条码；失败或作废时清空
     station_materials: Dict[int, str] = field(default_factory=dict)
-    # 加样输入（自动页写入，加样动作读取）
-    dose_material_id: str = ""
-    dose_weight_g: float = 0.0
+    # 加料输入（自动页写入；每条条码可单独设重量 mg）
+    dose_items: List[DoseItem] = field(default_factory=list)
     # 主系统试剂瓶进料握手（UDP）；进料中保存 request_id 供 DONE 校验
     bottle_feed_request_id: str = ""
     # 本机发起的出料握手

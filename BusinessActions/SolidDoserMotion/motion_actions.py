@@ -10,6 +10,7 @@ from Drivers.SolidDoserMotion.motion_driver import (
     apply_status_to_state,
     get_motion_driver,
 )
+from Drivers.SolidDoserMotion.motion_safety import update_indexing_rotation_allowed
 
 ActionResult = Tuple[bool, str]
 
@@ -33,8 +34,31 @@ def _sync_status(ctx: SolidDoserMotionContext) -> None:
     apply_status_to_state(ctx.motion, status)
     # 分度盘逻辑工位以上位机 IndexingDisc 为准
     ctx.motion.set_indexing_station(get_indexing_disc().current_station)
+    update_indexing_rotation_allowed(ctx.motion)
     if err:
         ctx.motion.last_message = err
+
+
+def _require_indexing_rotation_allowed(
+    ctx: SolidDoserMotionContext,
+) -> ActionResult | None:
+    """分度旋转前检查升降已使能、已回基准且不高于原点位置。"""
+    _sync_status(ctx)
+    if ctx.motion.indexing_rotation_allowed:
+        return None
+    lift = ctx.motion.axis(cfg.LIFT_AXIS_KEY)
+    axis = cfg.AXIS_BY_KEY[cfg.LIFT_AXIS_KEY]
+    origin = cfg.lift_position_mm("origin")
+    if not lift.servo_enabled:
+        msg = f"{axis.label}未使能，分度电机禁止旋转。"
+    elif not lift.datum_ok:
+        msg = f"{axis.label}未回基准点，分度电机禁止旋转。"
+    else:
+        msg = (
+            f"{axis.label}高于原点位置（当前 {lift.actual_position:g}{axis.unit}，"
+            f"须 ≤ {origin:g}{axis.unit}），分度电机禁止旋转。"
+        )
+    return _fail(ctx, "分度电机互锁", msg)
 
 
 def motion_refresh_all(ctx: SolidDoserMotionContext) -> ActionResult:
@@ -111,7 +135,7 @@ def motion_axis_go_datum(ctx: SolidDoserMotionContext, axis_key: str) -> ActionR
 
 
 def motion_horizontal_go_origin(ctx: SolidDoserMotionContext) -> ActionResult:
-    """水平电机运行至命名原点位置（0 mm）。须已使能且已回基准点。"""
+    """水平电机运行至命名原点位置。须已使能且已回基准点。"""
     return motion_horizontal_go_named(ctx, "origin")
 
 
@@ -137,8 +161,11 @@ def motion_horizontal_go_named(
 
 
 def motion_indexing_go_origin(ctx: SolidDoserMotionContext) -> ActionResult:
-    """分度电机运行至命名原点位置（0°，工位 0）。须已使能且已回基准点。"""
+    """分度电机运行至命名原点位置（81.55°，工位 1）。须已使能且已回基准点。"""
     blocked = _require_servo_and_datum(ctx, cfg.INDEXING_AXIS_KEY)
+    if blocked is not None:
+        return blocked
+    blocked = _require_indexing_rotation_allowed(ctx)
     if blocked is not None:
         return blocked
     axis = cfg.AXIS_BY_KEY[cfg.INDEXING_AXIS_KEY]
@@ -160,6 +187,9 @@ def motion_indexing_go_origin(ctx: SolidDoserMotionContext) -> ActionResult:
 def motion_indexing_align_nearest_station(ctx: SolidDoserMotionContext) -> ActionResult:
     """分度电机对齐最近逻辑工位：已在分度位则不动，否则转到最近工位。"""
     blocked = _require_servo_and_datum(ctx, cfg.INDEXING_AXIS_KEY)
+    if blocked is not None:
+        return blocked
+    blocked = _require_indexing_rotation_allowed(ctx)
     if blocked is not None:
         return blocked
     _sync_status(ctx)
@@ -201,7 +231,7 @@ def motion_indexing_align_nearest_station(ctx: SolidDoserMotionContext) -> Actio
 
 
 def motion_lift_go_origin(ctx: SolidDoserMotionContext) -> ActionResult:
-    """升降电机运行至命名原点位置（0 mm）。须已使能且已回基准点。"""
+    """升降电机运行至命名原点位置。须已使能且已回基准点。"""
     return motion_lift_go_named(ctx, "origin")
 
 
@@ -227,7 +257,7 @@ def motion_lift_go_named(
 
 
 def motion_powder_go_origin(ctx: SolidDoserMotionContext) -> ActionResult:
-    """承粉电机运行至命名原点位置（0°）。须已使能且已回基准点。"""
+    """承粉电机运行至命名原点位置。须已使能且已回基准点。"""
     return motion_powder_go_named(ctx, "origin")
 
 
@@ -257,8 +287,31 @@ def indexing_disc_go_datum(ctx: SolidDoserMotionContext) -> ActionResult:
     blocked = _require_servo(ctx, cfg.INDEXING_AXIS_KEY)
     if blocked is not None:
         return blocked
+    blocked = _require_indexing_rotation_allowed(ctx)
+    if blocked is not None:
+        return blocked
     action = "分度盘回基准点"
     ok, detail = get_indexing_disc().go_datum()
+    _sync_status(ctx)
+    if ok:
+        return _ok(ctx, action, detail)
+    return _fail(ctx, action, detail)
+
+
+def indexing_disc_go_to_station(
+    ctx: SolidDoserMotionContext, station: int
+) -> ActionResult:
+    """分度盘转到指定工位（1～8）。须已使能且已回基准点。"""
+    blocked = _require_servo_and_datum(ctx, cfg.INDEXING_AXIS_KEY)
+    if blocked is not None:
+        return blocked
+    blocked = _require_indexing_rotation_allowed(ctx)
+    if blocked is not None:
+        return blocked
+    station = cfg.normalize_indexing_station(station)
+    action = f"分度盘 → 工位 {station}"
+    velocity = ctx.motion.axis(cfg.INDEXING_AXIS_KEY).velocity
+    ok, detail = get_indexing_disc().go_to_station(station, velocity)
     _sync_status(ctx)
     if ok:
         return _ok(ctx, action, detail)
@@ -268,6 +321,9 @@ def indexing_disc_go_datum(ctx: SolidDoserMotionContext) -> ActionResult:
 def indexing_disc_step_forward(ctx: SolidDoserMotionContext) -> ActionResult:
     """分度盘向前一分度。须已使能且已回基准点。"""
     blocked = _require_servo_and_datum(ctx, cfg.INDEXING_AXIS_KEY)
+    if blocked is not None:
+        return blocked
+    blocked = _require_indexing_rotation_allowed(ctx)
     if blocked is not None:
         return blocked
     action = "分度盘向前一分度"
@@ -282,6 +338,9 @@ def indexing_disc_step_forward(ctx: SolidDoserMotionContext) -> ActionResult:
 def indexing_disc_step_backward(ctx: SolidDoserMotionContext) -> ActionResult:
     """分度盘向后一分度。须已使能且已回基准点。"""
     blocked = _require_servo_and_datum(ctx, cfg.INDEXING_AXIS_KEY)
+    if blocked is not None:
+        return blocked
+    blocked = _require_indexing_rotation_allowed(ctx)
     if blocked is not None:
         return blocked
     action = "分度盘向后一分度"
@@ -303,6 +362,10 @@ def motion_axis_move_abs(ctx: SolidDoserMotionContext, axis_key: str) -> ActionR
         blocked = _require_servo_and_datum(ctx, axis_key)
     if blocked is not None:
         return blocked
+    if axis_key == cfg.INDEXING_AXIS_KEY:
+        blocked = _require_indexing_rotation_allowed(ctx)
+        if blocked is not None:
+            return blocked
     ok, detail = get_motion_driver().move_absolute(
         axis_key, st.target_position, st.velocity
     )

@@ -4,8 +4,11 @@
     分度盘 (IndexingDisc)
         └── 分度电机 (motion_driver / indexing axis)
 
-工位 0～7，相邻 45°。步进只改逻辑工位，再换算成整角度绝对定位，
-不读取实际位置的小数，避免误差累积。
+约定：go_to_station(N) / step 把工位 N 开到加料位（与调试「分度」一致）。
+扫码枪与加料位背对背，加料位停 N 时扫码位对准 N+4（见 motion_config）。
+
+工位 1～8（与盘面标签一致），相邻 45°；命名原点与工位 1 均为 81.55°。
+步进只改逻辑工位，再换算成整角度绝对定位，不读取实际位置的小数，避免误差累积。
 """
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ from Drivers.SolidDoserMotion.motion_driver import (
     SolidDoserMotionDriver,
     get_motion_driver,
 )
+from Drivers.SolidDoserMotion.motion_safety import check_indexing_rotation_allowed
 
 Result = Tuple[bool, str]
 
@@ -31,7 +35,7 @@ class IndexingDisc:
     def __init__(self, driver: Optional[SolidDoserMotionDriver] = None) -> None:
         self._driver = driver or get_motion_driver()
         self._axis_key = cfg.INDEXING_AXIS_KEY
-        self._station = 0
+        self._station = cfg.INDEXING_STATION_FIRST
 
     @property
     def station_count(self) -> int:
@@ -43,7 +47,7 @@ class IndexingDisc:
 
     @property
     def current_station(self) -> int:
-        """当前逻辑工位（0～7）。"""
+        """当前逻辑工位（1～8）。"""
         return self._station
 
     @property
@@ -52,23 +56,30 @@ class IndexingDisc:
         return cfg.indexing_station_to_angle(self._station)
 
     def go_datum(self) -> Result:
-        """分度盘回基准点：驱动分度电机找外部基准，成功后工位归 0。"""
+        """分度盘回基准点：找外部基准；成功后逻辑工位归 1（与命名原点绑定）。"""
+        ok, detail = self._ensure_rotation_allowed()
+        if not ok:
+            return False, detail
         ok, detail = self._driver.go_datum(self._axis_key)
         if not ok:
             return False, detail
-        self._station = 0
-        return True, f"分度盘已回基准点（工位 0）。{detail}"
+        self._station = cfg.INDEXING_STATION_FIRST
+        origin_deg = cfg.indexing_position_deg("origin")
+        return True, (
+            f"分度盘已回基准点（工位 {self._station} / 原点 {origin_deg:g}°）。"
+            f"{detail}"
+        )
 
     def step_forward(self, velocity: float) -> Result:
-        """向前一分度：转到下一工位（工位 +1，绕回 0～7）。"""
+        """向前一分度：转到下一工位（工位 +1，绕回 1～8）。"""
         return self._step(+1, velocity)
 
     def step_backward(self, velocity: float) -> Result:
-        """向后一分度：转到上一工位（工位 -1，绕回 0～7）。"""
+        """向后一分度：转到上一工位（工位 -1，绕回 1～8）。"""
         return self._step(-1, velocity)
 
     def go_to_station(self, station: int, velocity: float) -> Result:
-        """转到指定工位（0～7）。"""
+        """转到指定工位（1～8）。"""
         station = cfg.normalize_indexing_station(station)
         return self._move_to_station(station, velocity)
 
@@ -80,6 +91,12 @@ class IndexingDisc:
     def bind_station(self, station: int) -> None:
         """仅同步逻辑工位，不驱动电机（状态恢复用）。"""
         self._station = cfg.normalize_indexing_station(station)
+
+    def _ensure_rotation_allowed(self) -> Result:
+        status, err = self._driver.read_status()
+        if err:
+            return False, err
+        return check_indexing_rotation_allowed(status)
 
     def _step(self, delta: int, velocity: float) -> Result:
         next_station = cfg.normalize_indexing_station(self._station + delta)
@@ -93,6 +110,9 @@ class IndexingDisc:
         )
 
     def _move_to_station(self, station: int, velocity: float) -> Result:
+        ok, detail = self._ensure_rotation_allowed()
+        if not ok:
+            return False, detail
         target = cfg.indexing_station_to_angle(station)
         ok, detail = self._driver.move_absolute(self._axis_key, target, velocity)
         if not ok:

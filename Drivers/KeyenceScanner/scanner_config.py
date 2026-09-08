@@ -10,7 +10,7 @@ SCANNER_HOST = os.environ.get("SOLIDDOSER_SCANNER_HOST", "192.168.0.3")
 SCANNER_PORT = int(os.environ.get("SOLIDDOSER_SCANNER_PORT", "9004"))
 
 CONNECT_TIMEOUT_S = 3.0
-READ_TIMEOUT_S = 5.0
+READ_TIMEOUT_S = 10.0
 # 读码结果返回后，LOFF 等收尾命令的短超时
 FOLLOWUP_TIMEOUT_S = 0.2
 # 默认去掉 SR-X 附加数据（如 694...:00:100%:23 → 694...）

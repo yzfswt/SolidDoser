@@ -4,6 +4,8 @@ from UIInteraction.UIGenerator.MainUI import MainUI
 
 from Common.ActionLogger import get_action_logger
 from Common.AppLogging import setup_app_logging, stop_log_maintenance
+from Common.LocalDatabase import init_schema
+from Common.StationMaterialsStore import load_station_materials
 
 from BusinessActions.DeviceManager import DeviceManager
 
@@ -81,6 +83,11 @@ if __name__ == "__main__":
     main_window = MainUI()
 
     param_storage = ParameterStorage()
+
+    init_schema()
+    loaded, load_detail = load_station_materials(param_storage.solid_doser_system)
+    if loaded:
+        get_action_logger().record(f"已加载上次物料条码：{load_detail}")
 
     main_window.bind_solid_doser(param_storage)
 

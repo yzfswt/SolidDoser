@@ -9,6 +9,8 @@ from BusinessActions.SolidDoserSystem.system_context import SolidDoserSystemCont
 from BusinessActions.UIFeedback.UIFeedbackHandler import UIFeedbackHandler
 from Common.ActionLogger import get_action_logger
 from Common.AppLogging import setup_app_logging, stop_log_maintenance
+from Common.LocalDatabase import init_schema
+from Common.StationMaterialsStore import load_station_materials
 from UIInteraction.ControlActions.ButtonActionManager import ButtonActionManager
 from UIInteraction.ParameterManagement.ParameterStorage import ParameterStorage
 from UIInteraction.UIGenerator.MainUI import MainUI
@@ -20,6 +22,10 @@ if __name__ == "__main__":
     get_action_logger().record("应用启动")
     main_window = MainUI()
     param_storage = ParameterStorage()
+    init_schema()
+    loaded, load_detail = load_station_materials(param_storage.solid_doser_system)
+    if loaded:
+        get_action_logger().record(f"已加载上次物料条码：{load_detail}")
     main_window.bind_solid_doser(param_storage)
     ui_feedback = UIFeedbackHandler(main_window)
     device_manager = DeviceManager(param_storage)

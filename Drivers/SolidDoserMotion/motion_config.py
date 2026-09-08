@@ -22,6 +22,8 @@ DATUM_TIMEOUT_S = 180.0  # 找外部基准点（PLC CmdHome / MC_Home）超时
 POWER_ON_TIMEOUT_S = 15.0
 POLL_INTERVAL_S = 0.2
 POSITION_MATCH_TOLERANCE = 0.5
+# 分度盘「停在工位」判定（°）；比通用容差更严
+INDEXING_STATION_MATCH_TOLERANCE_DEG = 0.01
 
 # 轴命令字 Cmd_*_W / 状态字 Sts_*_W 位定义（与 PLC_PRG 一致）
 CMD_BIT_POWER = 0
@@ -38,12 +40,17 @@ STS_BIT_ALARM = 5
 # AM600 Modbus 保持寄存器地址 = %MW 索引（1:1）。
 # %MW230 → HR 230；%MD250（占 MW500/501）→ HR 500。
 
-# 分度盘：8 工位，工位号 0～7，相邻相差 45°
+# 分度盘：8 工位，工位号 1～8（与盘面标签一致），相邻相差 45°。
+# 命名原点与工位 1 绑定，均为 INDEXING_STATION1_DEG（81.55°）。
 INDEXING_STATION_COUNT = 8
+INDEXING_STATION_FIRST = 1
 INDEXING_STEP_DEG = 45.0
+INDEXING_STATION1_DEG = 81.55
+# 加料位与扫码位背对背：加料位停工位 N 时，扫码枪读到的是工位 N+4（模 8）
+INDEXING_FEED_TO_SCAN_OFFSET = 4
 INDEXING_AXIS_KEY = "indexing"
 
-# 水平轴命名位置（mm）：原点 / 空闲 / 工作
+# 水平轴命名位置（mm）：原点 / 工作
 HORIZONTAL_AXIS_KEY = "horizontal"
 
 
@@ -54,9 +61,9 @@ class IndexingNamedPosition:
     position_deg: float
 
 
-# 分度轴命名位置（°）：原点对应工位 0
+# 分度轴命名位置（°）：原点 = 工位 1 = INDEXING_STATION1_DEG
 INDEXING_POSITIONS: Tuple[IndexingNamedPosition, ...] = (
-    IndexingNamedPosition("origin", "原点位置", 0.0),
+    IndexingNamedPosition("origin", "原点位置", INDEXING_STATION1_DEG),
 )
 
 INDEXING_POSITION_BY_KEY: Dict[str, IndexingNamedPosition] = {
@@ -79,8 +86,7 @@ class HorizontalNamedPosition:
 
 
 HORIZONTAL_POSITIONS: Tuple[HorizontalNamedPosition, ...] = (
-    HorizontalNamedPosition("origin", "原点位置", 0.0),
-    HorizontalNamedPosition("idle", "空闲位置", 10.0),
+    HorizontalNamedPosition("origin", "原点位置", 10.0),
     HorizontalNamedPosition("work", "工作位置", 20.0),
 )
 
@@ -96,7 +102,7 @@ def horizontal_position_mm(key: str) -> float:
     return HORIZONTAL_POSITION_BY_KEY[key].position_mm
 
 
-# 升降轴命名位置（mm）：原点 / 空闲 / 工作
+# 升降轴命名位置（mm）：原点 / 工作
 LIFT_AXIS_KEY = "lift"
 
 
@@ -108,9 +114,8 @@ class LiftNamedPosition:
 
 
 LIFT_POSITIONS: Tuple[LiftNamedPosition, ...] = (
-    LiftNamedPosition("origin", "原点位置", 0.0),
-    LiftNamedPosition("idle", "空闲位置", 10.0),
-    LiftNamedPosition("work", "工作位置", 20.0),
+    LiftNamedPosition("origin", "原点位置", 10.0),
+    LiftNamedPosition("work", "工作位置", 28.0),
 )
 
 LIFT_POSITION_BY_KEY: Dict[str, LiftNamedPosition] = {
@@ -125,7 +130,7 @@ def lift_position_mm(key: str) -> float:
     return LIFT_POSITION_BY_KEY[key].position_mm
 
 
-# 承粉轴命名位置（°）：原点 / 空闲 / 工作
+# 承粉轴命名位置（°）：原点 / 工作
 POWDER_AXIS_KEY = "powder"
 
 
@@ -137,8 +142,7 @@ class PowderNamedPosition:
 
 
 POWDER_POSITIONS: Tuple[PowderNamedPosition, ...] = (
-    PowderNamedPosition("origin", "原点位置", 0.0),
-    PowderNamedPosition("idle", "空闲位置", 10.0),
+    PowderNamedPosition("origin", "原点位置", 10.0),
     PowderNamedPosition("work", "工作位置", 20.0),
 )
 
@@ -154,24 +158,62 @@ def powder_position_mm(key: str) -> float:
     return POWDER_POSITION_BY_KEY[key].position_mm
 
 
+def iter_indexing_stations() -> range:
+    """工位号序列：1～8。"""
+    return range(
+        INDEXING_STATION_FIRST,
+        INDEXING_STATION_FIRST + INDEXING_STATION_COUNT,
+    )
+
+
 def indexing_station_to_angle(station: int) -> float:
-    """工位号 → 目标角度（°）。"""
-    s = station % INDEXING_STATION_COUNT
-    if s < 0:
-        s += INDEXING_STATION_COUNT
-    return s * INDEXING_STEP_DEG
+    """工位号（1～8）→ 目标角度（°）。工位 1 = INDEXING_STATION1_DEG。"""
+    s = normalize_indexing_station(station)
+    return INDEXING_STATION1_DEG + (s - INDEXING_STATION_FIRST) * INDEXING_STEP_DEG
 
 
 def indexing_angle_to_station(angle_deg: float) -> int:
-    """角度 → 最近工位号（0～7），用于绝对定位后同步逻辑工位。"""
-    return int(round(angle_deg / INDEXING_STEP_DEG)) % INDEXING_STATION_COUNT
+    """角度 → 最近工位号（1～8），用于绝对定位后同步逻辑工位。"""
+    span = 360.0
+    rel = (float(angle_deg) - INDEXING_STATION1_DEG) % span
+    if rel < 0:
+        rel += span
+    idx = int(round(rel / INDEXING_STEP_DEG)) % INDEXING_STATION_COUNT
+    if idx < 0:
+        idx += INDEXING_STATION_COUNT
+    return idx + INDEXING_STATION_FIRST
+
+
+def indexing_at_any_station(angle_deg: float) -> bool:
+    """实际角是否落在任一工位角度（容差 INDEXING_STATION_MATCH_TOLERANCE_DEG，按 360° 最短弧）。"""
+    station = indexing_angle_to_station(angle_deg)
+    target = indexing_station_to_angle(station)
+    span = 360.0
+    delta = abs(float(angle_deg) - target) % span
+    delta = min(delta, span - delta)
+    return delta <= INDEXING_STATION_MATCH_TOLERANCE_DEG
 
 
 def normalize_indexing_station(station: int) -> int:
-    s = station % INDEXING_STATION_COUNT
+    """归一化到工位号 1～8。"""
+    s = (int(station) - INDEXING_STATION_FIRST) % INDEXING_STATION_COUNT
     if s < 0:
         s += INDEXING_STATION_COUNT
-    return s
+    return s + INDEXING_STATION_FIRST
+
+
+def indexing_feed_station_to_scan_station(feed_station: int) -> int:
+    """加料位工位 → 当前对准扫码枪的工位（背对背，+4）。"""
+    return normalize_indexing_station(
+        normalize_indexing_station(feed_station) + INDEXING_FEED_TO_SCAN_OFFSET
+    )
+
+
+def indexing_scan_station_to_feed_station(scan_station: int) -> int:
+    """扫码位工位 → 应开到加料位的工位（背对背，-4）。"""
+    return normalize_indexing_station(
+        normalize_indexing_station(scan_station) - INDEXING_FEED_TO_SCAN_OFFSET
+    )
 
 
 @dataclass(frozen=True)
@@ -254,7 +296,7 @@ AXES: Tuple[AxisMap, ...] = (
         d_sts=233,
         pos_min=0.0,
         pos_max=500.0,
-        vel_default=20.0,
+        vel_default=5.0,
         unit="mm",
     ),
     _axis_block(
@@ -266,7 +308,7 @@ AXES: Tuple[AxisMap, ...] = (
         d_sts=235,
         pos_min=0.0,
         pos_max=360.0,
-        vel_default=60.0,
+        vel_default=100.0,
         unit="°",
     ),
     _axis_block(

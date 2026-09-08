@@ -6,10 +6,10 @@ import time
 from typing import Callable, Optional, Sequence, Tuple
 
 from BusinessActions.KeyenceScanner.scanner_actions import scanner_trigger_read
-from BusinessActions.SartoriusBalance.balance_actions import balance_read_weight
 from BusinessActions.SolidDoserMotion import motion_actions as motion
 from BusinessActions.SolidDoserSystem.system_context import SolidDoserSystemContext
 from Common.ActionLogger import get_action_logger
+from Common.StationMaterialsStore import save_station_materials
 from Drivers.SolidDoserMotion import motion_config as cfg
 from Drivers.SolidDoserMotion.indexing_disc import get_indexing_disc
 from Drivers.SolidDoserMotion.motion_driver import (
@@ -22,22 +22,21 @@ from UIInteraction.ParameterManagement.SolidDoserSystemModel import SystemRunSta
 ActionResult = Tuple[bool, str]
 _dose_log = logging.getLogger("soliddoser.dose")
 
-# 加样参数
-DOSE_STIR_DURATION_S = 20.0
-DOSE_WEIGHT_POLL_S = 0.3
-DOSE_WEIGHT_TIMEOUT_S = 120.0
+# 加料参数（天平未接入前，工作段用固定延时）
+DOSE_WORK_DURATION_S = 10.0
 
-# 回基准点覆盖轴及顺序（搅拌不参与）
+# 回基准点判定轴（搅拌不参与；顺序与 system_run_go_datum 中轴回基准一致）
 SYSTEM_DATUM_AXIS_KEYS: Sequence[str] = (
-    cfg.HORIZONTAL_AXIS_KEY,
     cfg.LIFT_AXIS_KEY,
+    cfg.HORIZONTAL_AXIS_KEY,
     cfg.POWDER_AXIS_KEY,
     cfg.INDEXING_AXIS_KEY,
 )
 
 _STIR_AXIS_KEY = "stirring"
 
-# 「已回原点」判定轴：水平/升降空闲位、承粉工作位、分度任意工位、搅拌停止；另要求振动停止
+# 「已回原点」判定轴：水平/升降/承粉在命名原点；分度停在任一工位；搅拌停止；
+# 另要求振动与离子风扇停止
 SYSTEM_ORIGIN_AXIS_KEYS: Sequence[str] = (
     cfg.HORIZONTAL_AXIS_KEY,
     cfg.INDEXING_AXIS_KEY,
@@ -46,12 +45,11 @@ SYSTEM_ORIGIN_AXIS_KEYS: Sequence[str] = (
     _STIR_AXIS_KEY,
 )
 
-# 「已回原点」判定用位置目标（与「回原点」动作目标可不相同）
+# 「已回原点」判定用位置目标（分度除外：见 indexing_at_any_station）
 _ORIGIN_TARGET_GETTERS: dict[str, Callable[[], float]] = {
-    cfg.HORIZONTAL_AXIS_KEY: lambda: cfg.horizontal_position_mm("idle"),
-    cfg.INDEXING_AXIS_KEY: lambda: cfg.indexing_position_deg("origin"),
-    cfg.LIFT_AXIS_KEY: lambda: cfg.lift_position_mm("idle"),
-    cfg.POWDER_AXIS_KEY: lambda: cfg.powder_position_mm("work"),
+    cfg.HORIZONTAL_AXIS_KEY: lambda: cfg.horizontal_position_mm("origin"),
+    cfg.LIFT_AXIS_KEY: lambda: cfg.lift_position_mm("origin"),
+    cfg.POWDER_AXIS_KEY: lambda: cfg.powder_position_mm("origin"),
 }
 
 
@@ -98,12 +96,8 @@ def _axis_at_named_origin(motion_state: SolidDoserMotionState, axis_key: str) ->
         return not motion_state.axis(axis_key).moving
     actual = motion_state.axis(axis_key).actual_position
     if axis_key == cfg.INDEXING_AXIS_KEY:
-        # 分度轴：停在任意逻辑工位（0～7，45° 对齐）即视为已回原点
-        axis = cfg.AXIS_BY_KEY[axis_key]
-        span = axis.pos_max - axis.pos_min
-        station = cfg.indexing_angle_to_station(actual)
-        target = cfg.indexing_station_to_angle(station)
-        return _position_near(actual, target, wrap_span=span)
+        # 分度：停在任一工位（1～8）即视为原点条件满足，不限工位 1
+        return cfg.indexing_at_any_station(actual)
     getter = _ORIGIN_TARGET_GETTERS.get(axis_key)
     if getter is None:
         return False
@@ -122,7 +116,9 @@ def refresh_system_flags(ctx: SolidDoserSystemContext) -> None:
     )
     ctx.system.origin_ok = all(
         _axis_at_named_origin(motion_state, key) for key in SYSTEM_ORIGIN_AXIS_KEYS
-    ) and (not motion_state.do_states.get("vibration", False))
+    ) and (not motion_state.do_states.get("vibration", False)) and (
+        not motion_state.do_states.get("ion_fan", False)
+    )
 
 
 def _begin(
@@ -365,84 +361,85 @@ def system_refresh_status(ctx: SolidDoserSystemContext) -> ActionResult:
     return _ok(ctx, action, ctx.system.overview_summary())
 
 
-def system_run_servo_on_all(ctx: SolidDoserSystemContext) -> ActionResult:
-    """空闲 → 使能中 → 空闲。按显示顺序使能全部电机。"""
-    action = "系统使能"
-    blocked = _begin(ctx, SystemRunState.ENABLING, action)
-    if blocked is not None:
-        return blocked
-
+def _run_servo_on_all_steps(ctx: SolidDoserSystemContext) -> ActionResult:
+    """按显示顺序使能全部电机（不切换系统运行态）。"""
     keys = [axis.key for axis in cfg.AXES]
     ctx.system.set_progress(0, len(keys), "准备使能")
     try:
         for i, axis_key in enumerate(keys):
             if _aborted(ctx):
-                return _finish(ctx, False, action, "使能已中止。")
+                return False, "使能已中止。"
             label = cfg.AXIS_BY_KEY[axis_key].label
             ctx.system.set_progress(i, len(keys), f"{label} 使能")
             ok, detail = motion.motion_axis_servo_on(ctx.motion_ctx, axis_key)
             if not ok:
-                return _finish(ctx, False, action, detail)
+                return False, detail
             ctx.system.set_progress(i + 1, len(keys), f"{label} 完成")
-        return _finish(ctx, True, action, "全部电机已使能。")
+        return True, "全部电机已使能。"
     except Exception as exc:  # noqa: BLE001
-        return _finish(ctx, False, action, f"使能异常: {exc}")
+        return False, f"使能异常: {exc}"
 
 
-def system_run_go_datum(ctx: SolidDoserSystemContext) -> ActionResult:
-    """空闲 → 回基准点中 → 空闲。框架：按轴顺序调用单轴回基准点。"""
-    action = "系统回基准点"
-    blocked = _begin(ctx, SystemRunState.HOMING, action)
-    if blocked is not None:
-        return blocked
-
-    keys = list(SYSTEM_DATUM_AXIS_KEYS)
-    ctx.system.set_progress(0, len(keys), "准备回基准点")
-    try:
-        for i, axis_key in enumerate(keys):
-            if _aborted(ctx):
-                return _finish(ctx, False, action, "回基准点已中止。")
-            label = cfg.AXIS_BY_KEY[axis_key].label
-            ctx.system.set_progress(i, len(keys), f"{label} 回基准点")
-            ok, detail = motion.motion_axis_go_datum(ctx.motion_ctx, axis_key)
-            if not ok:
-                return _finish(ctx, False, action, detail)
-            ctx.system.set_progress(i + 1, len(keys), f"{label} 完成")
-        return _finish(ctx, True, action, "系统回基准点完成。")
-    except Exception as exc:  # noqa: BLE001 — 框架兜底回空闲
-        return _finish(ctx, False, action, f"回基准点异常: {exc}")
-
-
-def system_run_go_origin(ctx: SolidDoserSystemContext) -> ActionResult:
-    """空闲 → 回原点中 → 空闲。
-
-    顺序：风扇停 → 振动停 → 水平空闲位 → 搅拌停 → 升降空闲位 → 承粉工作位
-    → 分度对齐最近工位（已在分度位则跳过）。
-    """
-    action = "系统回原点"
-    blocked = _begin(ctx, SystemRunState.GOING_ORIGIN, action)
-    if blocked is not None:
-        return blocked
-
+def _run_go_datum_steps(ctx: SolidDoserSystemContext) -> ActionResult:
+    """执行回基准点各步骤（不切换系统运行态）。"""
     steps: list[tuple[str, Callable[[], ActionResult]]] = [
-        ("风扇停止", lambda: motion.motion_do_set(ctx.motion_ctx, "ion_fan", False)),
         ("振动电机停止", lambda: motion.motion_do_set(ctx.motion_ctx, "vibration", False)),
-        (
-            "水平电机到空闲位置",
-            lambda: motion.motion_horizontal_go_named(ctx.motion_ctx, "idle"),
-        ),
+        ("风扇停止", lambda: motion.motion_do_set(ctx.motion_ctx, "ion_fan", False)),
         ("搅拌电机停止", lambda: motion.motion_axis_stop(ctx.motion_ctx, _STIR_AXIS_KEY)),
         (
-            "升降电机到空闲位置",
-            lambda: motion.motion_lift_go_named(ctx.motion_ctx, "idle"),
+            "升降电机回基准点",
+            lambda: motion.motion_axis_go_datum(ctx.motion_ctx, cfg.LIFT_AXIS_KEY),
         ),
         (
-            "承粉电机到工作位置",
-            lambda: motion.motion_powder_go_named(ctx.motion_ctx, "work"),
+            "水平电机回基准点",
+            lambda: motion.motion_axis_go_datum(ctx.motion_ctx, cfg.HORIZONTAL_AXIS_KEY),
         ),
         (
-            "分度电机对齐工位",
-            lambda: motion.motion_indexing_align_nearest_station(ctx.motion_ctx),
+            "承粉电机回基准点",
+            lambda: motion.motion_axis_go_datum(ctx.motion_ctx, cfg.POWDER_AXIS_KEY),
+        ),
+        (
+            "分度电机回基准点",
+            lambda: motion.motion_axis_go_datum(ctx.motion_ctx, cfg.INDEXING_AXIS_KEY),
+        ),
+    ]
+    total = len(steps)
+    ctx.system.set_progress(0, total, "准备回基准点")
+    try:
+        for i, (label, runner) in enumerate(steps):
+            if _aborted(ctx):
+                return False, "回基准点已中止。"
+            ctx.system.set_progress(i, total, label)
+            ok, detail = runner()
+            if not ok:
+                return False, detail
+            ctx.system.set_progress(i + 1, total, f"{label} 完成")
+        return True, "系统回基准点完成。"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"回基准点异常: {exc}"
+
+
+def _run_go_origin_steps(ctx: SolidDoserSystemContext) -> ActionResult:
+    """执行回原点各步骤（不切换系统运行态）。"""
+    steps: list[tuple[str, Callable[[], ActionResult]]] = [
+        ("振动电机停止", lambda: motion.motion_do_set(ctx.motion_ctx, "vibration", False)),
+        ("离子风扇停止", lambda: motion.motion_do_set(ctx.motion_ctx, "ion_fan", False)),
+        ("搅拌电机停止", lambda: motion.motion_axis_stop(ctx.motion_ctx, _STIR_AXIS_KEY)),
+        (
+            "升降电机回原点",
+            lambda: motion.motion_lift_go_origin(ctx.motion_ctx),
+        ),
+        (
+            "水平电机回原点",
+            lambda: motion.motion_horizontal_go_origin(ctx.motion_ctx),
+        ),
+        (
+            "承粉电机回原点",
+            lambda: motion.motion_powder_go_origin(ctx.motion_ctx),
+        ),
+        (
+            "分度电机回原点",
+            lambda: motion.motion_indexing_go_origin(ctx.motion_ctx),
         ),
     ]
     total = len(steps)
@@ -450,22 +447,97 @@ def system_run_go_origin(ctx: SolidDoserSystemContext) -> ActionResult:
     try:
         for i, (label, runner) in enumerate(steps):
             if _aborted(ctx):
-                return _finish(ctx, False, action, "回原点已中止。")
+                return False, "回原点已中止。"
             ctx.system.set_progress(i, total, label)
             ok, detail = runner()
             if not ok:
-                return _finish(ctx, False, action, detail)
+                return False, detail
             ctx.system.set_progress(i + 1, total, f"{label} 完成")
-        return _finish(ctx, True, action, "系统回原点完成。")
+        return True, "系统回原点完成。"
     except Exception as exc:  # noqa: BLE001
-        return _finish(ctx, False, action, f"回原点异常: {exc}")
+        return False, f"回原点异常: {exc}"
+
+
+def system_run_servo_on_all(ctx: SolidDoserSystemContext) -> ActionResult:
+    """空闲 → 使能中 → 空闲。按显示顺序使能全部电机。"""
+    action = "系统使能"
+    blocked = _begin(ctx, SystemRunState.ENABLING, action)
+    if blocked is not None:
+        return blocked
+    ok, detail = _run_servo_on_all_steps(ctx)
+    return _finish(ctx, ok, action, detail)
+
+
+def system_run_go_datum(ctx: SolidDoserSystemContext) -> ActionResult:
+    """空闲 → 回基准点中 → 空闲。
+
+    顺序（逐步完成，避免机构干涉）：
+    振动关 → 风扇关 → 搅拌停 → 升降回基准 → 水平回基准 → 承粉回基准
+    → 分度回基准。
+    """
+    action = "系统回基准点"
+    blocked = _begin(ctx, SystemRunState.HOMING, action)
+    if blocked is not None:
+        return blocked
+    ok, detail = _run_go_datum_steps(ctx)
+    return _finish(ctx, ok, action, detail)
+
+
+def system_run_go_origin(ctx: SolidDoserSystemContext) -> ActionResult:
+    """空闲 → 回原点中 → 空闲。
+
+    顺序：振动停 → 风扇停 → 搅拌停 → 升降回原点 → 水平回原点
+    → 承粉回原点 → 分度回原点（命名原点 / 工位 1）。
+    使能/基准不在入口统一校验，由各轴回原点动作逐步检查。
+    """
+    action = "系统回原点"
+    blocked = _begin(ctx, SystemRunState.GOING_ORIGIN, action)
+    if blocked is not None:
+        return blocked
+    ok, detail = _run_go_origin_steps(ctx)
+    return _finish(ctx, ok, action, detail)
+
+
+def system_run_device_init(ctx: SolidDoserSystemContext) -> ActionResult:
+    """空闲 → 设备初始化中 → 空闲。
+
+    全程保持忙碌，依次：使能 → 回基准点 → 回原点，避免阶段间隙被其它流程插入。
+    任一步失败或中止则停止后续步骤。
+    """
+    action = "设备初始化"
+    blocked = _begin(ctx, SystemRunState.DEVICE_INITING, action)
+    if blocked is not None:
+        return blocked
+
+    try:
+        ok, detail = _run_servo_on_all_steps(ctx)
+        if not ok:
+            return _finish(ctx, False, action, f"使能失败：{detail}")
+
+        ok, detail = _run_go_datum_steps(ctx)
+        if not ok:
+            return _finish(ctx, False, action, f"回基准点失败：{detail}")
+
+        ok, detail = _run_go_origin_steps(ctx)
+        if not ok:
+            return _finish(ctx, False, action, f"回原点失败：{detail}")
+
+        return _finish(
+            ctx,
+            True,
+            action,
+            "设备初始化完成（已使能、已回基准点、已回原点）。",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _finish(ctx, False, action, f"设备初始化异常: {exc}")
 
 
 def system_run_initialize(ctx: SolidDoserSystemContext) -> ActionResult:
     """空闲 → 初始化中 → 空闲。
 
-    须已回原点。分度盘转一圈扫 8 工位，建立工位→物料条码表。
-    任一步失败或中止则整表作废；全部成功则 materials_ok=True。
+    须已回原点。分度盘转一圈：每次开到加料位工位 N，扫码枪读的是背对背工位
+    N+4，条码记入扫码位工位。某工位扫码超时/无码时记为空并继续；定位失败或中止
+    则整表作废。跑完 8 工位后 materials_ok=True，并写入本地缓存供下次启动加载。
     """
     action = "物料初始化"
     refresh_system_flags(ctx)
@@ -481,8 +553,9 @@ def system_run_initialize(ctx: SolidDoserSystemContext) -> ActionResult:
         return blocked
 
     station_count = cfg.INDEXING_STATION_COUNT
+    stations = list(cfg.iter_indexing_stations())
     ctx.system.clear_materials()
-    ctx.system.station_materials = {i: "" for i in range(station_count)}
+    ctx.system.station_materials = {i: "" for i in stations}
     ctx.system.materials_ok = False
     ctx.system.set_progress(0, station_count, "准备扫码")
     disc = get_indexing_disc()
@@ -493,50 +566,71 @@ def system_run_initialize(ctx: SolidDoserSystemContext) -> ActionResult:
         return _finish(ctx, False, action, msg)
 
     try:
-        for station in range(station_count):
+        # feed_station：开到加料位的工位；scan_station：此时扫码枪对准的工位
+        for done, feed_station in enumerate(stations):
+            scan_station = cfg.indexing_feed_station_to_scan_station(feed_station)
             if _aborted(ctx):
                 return _fail_init("初始化已中止，物料表已作废。")
-            ctx.system.set_progress(station, station_count, f"工位 {station} 定位")
-            ok, detail = disc.go_to_station(station, velocity)
+            ctx.system.set_progress(
+                done,
+                station_count,
+                f"加料位→工位{feed_station}（扫码位=工位{scan_station}）",
+            )
+            ok, detail = disc.go_to_station(feed_station, velocity)
             ctx.motion_ctx.motion.set_indexing_station(disc.current_station)
             if not ok:
-                return _fail_init(f"工位 {station} 定位失败: {detail}")
+                return _fail_init(f"工位 {feed_station} 定位失败: {detail}")
 
             if _aborted(ctx):
                 return _fail_init("初始化已中止，物料表已作废。")
-            ctx.system.set_progress(station, station_count, f"工位 {station} 扫码")
+            ctx.system.set_progress(
+                done, station_count, f"扫码工位 {scan_station}"
+            )
             ok, detail = scanner_trigger_read(ctx.scanner_ctx)
             barcode = (ctx.scanner_ctx.scanner.last_barcode or "").strip()
             if not ok or not barcode:
-                return _fail_init(f"工位 {station} 扫码失败: {detail}")
-            ctx.system.station_materials[station] = barcode
+                ctx.system.station_materials[scan_station] = ""
+                reason = detail or "超时或无码"
+                ctx.system.set_progress(
+                    done + 1,
+                    station_count,
+                    f"工位 {scan_station} 无粉盒/未读到（{reason}），继续",
+                )
+                continue
+            ctx.system.station_materials[scan_station] = barcode
             ctx.system.set_progress(
-                station + 1, station_count, f"工位 {station} → {barcode}"
+                done + 1,
+                station_count,
+                f"工位 {scan_station} → {barcode}",
             )
-
-        if any(
-            not (ctx.system.station_materials.get(i) or "").strip()
-            for i in range(station_count)
-        ):
-            return _fail_init("物料表不完整，已作废。")
 
         ctx.system.materials_ok = True
         mapped = "；".join(
-            f"{s}:{c}" for s, c in sorted(ctx.system.station_materials.items())
+            f"{s}:{(c or '—')}"
+            for s, c in sorted(ctx.system.station_materials.items())
         )
-        return _finish(ctx, True, action, f"初始化完成。{mapped}")
+        saved, save_detail = save_station_materials(ctx.system)
+        save_note = (
+            f"；已本地保存（{save_detail}）"
+            if saved
+            else f"；本地保存失败: {save_detail}"
+        )
+        return _finish(ctx, True, action, f"初始化完成。{mapped}{save_note}")
     except Exception as exc:  # noqa: BLE001
         return _fail_init(f"初始化异常: {exc}")
 
 
 def system_run_dose(ctx: SolidDoserSystemContext) -> ActionResult:
-    """空闲 → 加样中 →（完成后调用系统回原点）→ 空闲。
+    """空闲 → 加料中 → 空闲。
 
-    输入：system.dose_material_id（条码）、system.dose_weight_g（净重 g）。
+    输入：dose_items（条码 + 各自重量 mg；天平未接时用固定延时代替称重）。
+
+    前置：物料表有效、条码均在表中、重量>0、设备在原点。
+    顺序：水平工作 →（分度→振开→搅开→升降工作→延时→振停→搅停→升降原点）×N
+    → 水平原点。
     """
-    action = "加样"
-    material_id = (ctx.system.dose_material_id or "").strip()
-    dose_weight = float(ctx.system.dose_weight_g or 0.0)
+    action = "加料"
+    items = list(ctx.system.dose_items or [])
     audit = get_action_logger()
 
     def _log_dose(msg: str) -> None:
@@ -545,43 +639,70 @@ def system_run_dose(ctx: SolidDoserSystemContext) -> ActionResult:
 
     if not ctx.system.materials_ok:
         msg = "未完成物料初始化，请先执行物料初始化。"
-        _log_dose(f"加样失败：{msg}")
+        _log_dose(f"加料失败：{msg}")
         return _fail(ctx, action, msg)
-    if not material_id:
-        msg = "请输入物料编号（条码）。"
-        _log_dose(f"加样失败：{msg}")
+    if not items:
+        msg = "请至少添加一条物料条码及重量（mg）。"
+        _log_dose(f"加料失败：{msg}")
         return _fail(ctx, action, msg)
-    if dose_weight <= 0:
-        msg = "加样重量必须大于 0。"
-        _log_dose(f"加样失败：{msg}")
+
+    bad_weight = [
+        (it.material_id or "").strip() or f"第{i}行"
+        for i, it in enumerate(items, start=1)
+        if float(it.weight_mg or 0.0) <= 0
+    ]
+    if bad_weight:
+        msg = "加料重量必须大于 0（单位 mg）：" + ", ".join(bad_weight)
+        _log_dose(f"加料失败：{msg}")
+        return _fail(ctx, action, msg)
+
+    empty_code = any(not (it.material_id or "").strip() for it in items)
+    if empty_code:
+        msg = "存在空的物料条码，请填写完整。"
+        _log_dose(f"加料失败：{msg}")
         return _fail(ctx, action, msg)
 
     refresh_system_flags(ctx)
     if not ctx.system.enabled_ok:
         msg = "未使能，请先执行使能。"
-        _log_dose(f"加样失败：{msg}")
+        _log_dose(f"加料失败：{msg}")
+        return _fail(ctx, action, msg)
+    if not ctx.system.origin_ok:
+        msg = "设备未在原点，请先回原点。"
+        _log_dose(f"加料失败：{msg}")
         return _fail(ctx, action, msg)
 
-    station = ctx.system.find_station_by_material(material_id)
-    if station is None:
-        msg = f"物料表中无此物料编号：{material_id}"
-        _log_dose(f"加样失败：{msg}")
+    jobs: list[tuple[str, int, float]] = []
+    missing: list[str] = []
+    for it in items:
+        mid = (it.material_id or "").strip()
+        weight_mg = float(it.weight_mg or 0.0)
+        station = ctx.system.find_station_by_material(mid)
+        if station is None:
+            missing.append(mid)
+        else:
+            jobs.append((mid, station, weight_mg))
+    if missing:
+        msg = "物料条码无效或不在物料表中：" + ", ".join(missing)
+        _log_dose(f"加料失败：{msg}")
         return _fail(ctx, action, msg)
 
     blocked = _begin(ctx, SystemRunState.DOSING, action)
     if blocked is not None:
-        _log_dose(f"加样失败：{blocked[1]}")
+        _log_dose(f"加料失败：{blocked[1]}")
         return blocked
 
+    job_desc = "；".join(f"{m}@工位{s}/{w:g}mg" for m, s, w in jobs)
     _log_dose(
-        f"加样开始：物料={material_id}，工位={station}，目标净重={dose_weight:g} g"
+        f"加料开始：{job_desc}"
+        f"（暂用延时 {DOSE_WORK_DURATION_S:g}s 代替称重）"
     )
 
-    total = 11
+    steps_per_mat = 8
+    total = 1 + len(jobs) * steps_per_mat + 1
     disc = get_indexing_disc()
     indexing_vel = ctx.motion_ctx.motion.axis(cfg.INDEXING_AXIS_KEY).velocity
-    w0: float | None = None
-    w_final: float | None = None
+    progress = 0
 
     def _safe_stop_actuators() -> None:
         motion.motion_do_set(ctx.motion_ctx, "vibration", False)
@@ -589,188 +710,113 @@ def system_run_dose(ctx: SolidDoserSystemContext) -> ActionResult:
 
     def _fail_dose(msg: str) -> ActionResult:
         _safe_stop_actuators()
-        extra = ""
-        if w0 is not None:
-            extra += f"，初重={w0:g} g"
-        if w_final is not None:
-            net = w_final - w0 if w0 is not None else None
-            extra += f"，终重={w_final:g} g"
-            if net is not None:
-                extra += f"，实际净增={net:g} g"
-        _log_dose(
-            f"加样失败：物料={material_id}，工位={station}，"
-            f"目标净重={dose_weight:g} g{extra}，原因={msg}"
-        )
+        _log_dose(f"加料失败：{job_desc}，原因={msg}")
         return _finish(ctx, False, action, msg)
 
     def _sleep_interruptible(seconds: float, detail: str) -> Optional[str]:
-        """可中断等待；返回错误信息，None 表示正常结束。"""
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             if _aborted(ctx):
-                return "加样已停止。"
+                return "加料已停止。"
             remain = deadline - time.monotonic()
             ctx.system.progress_detail = f"{detail}（剩余 {remain:.0f}s）"
             time.sleep(min(0.2, max(0.0, remain)))
         return None
 
+    def _step(detail: str) -> None:
+        nonlocal progress
+        progress += 1
+        ctx.system.set_progress(progress, total, detail)
+
     try:
-        # 1 已完成查表
-        ctx.system.set_progress(1, total, f"物料 {material_id} → 工位 {station}")
-
-        # 2 搅拌停止
         if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(2, total, "搅拌电机停止")
-        ok, detail = motion.motion_axis_stop(ctx.motion_ctx, _STIR_AXIS_KEY)
-        if not ok:
-            return _fail_dose(detail)
-
-        # 3 振动停止
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(3, total, "振动电机停止")
-        ok, detail = motion.motion_do_set(ctx.motion_ctx, "vibration", False)
-        if not ok:
-            return _fail_dose(detail)
-
-        # 4 升降 → 空闲
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(4, total, "升降电机 → 空闲位置")
-        ok, detail = motion.motion_lift_go_named(ctx.motion_ctx, "idle")
-        if not ok:
-            return _fail_dose(detail)
-
-        # 5 承粉 → 空闲
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(5, total, "承粉电机 → 空闲位置")
-        ok, detail = motion.motion_powder_go_named(ctx.motion_ctx, "idle")
-        if not ok:
-            return _fail_dose(detail)
-
-        # 6 分度 → 加样工位
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(6, total, f"分度盘 → 工位 {station}")
-        ok, detail = disc.go_to_station(station, indexing_vel)
-        ctx.motion_ctx.motion.set_indexing_station(disc.current_station)
-        if not ok:
-            return _fail_dose(detail)
-
-        # 7 水平 → 工作
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(7, total, "水平电机 → 工作位置")
+            return _fail_dose("加料已停止。")
+        _step("水平电机 → 工作位置")
         ok, detail = motion.motion_horizontal_go_named(ctx.motion_ctx, "work")
         if not ok:
             return _fail_dose(detail)
 
-        # 8 升降 → 工作
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(8, total, "升降电机 → 工作位置")
-        ok, detail = motion.motion_lift_go_named(ctx.motion_ctx, "work")
-        if not ok:
-            return _fail_dose(detail)
+        for idx, (material_id, station, weight_mg) in enumerate(jobs, start=1):
+            prefix = f"[{idx}/{len(jobs)}] {material_id}"
 
-        # 9 搅拌运行 20s 后停止
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(9, total, "搅拌电机运行")
-        ok, detail = motion.motion_axis_move_abs(ctx.motion_ctx, _STIR_AXIS_KEY)
-        if not ok:
-            return _fail_dose(detail)
-        err = _sleep_interruptible(DOSE_STIR_DURATION_S, "搅拌电机运行")
-        motion.motion_axis_stop(ctx.motion_ctx, _STIR_AXIS_KEY)
-        if err:
-            return _fail_dose(err)
-
-        # 10 天平加样：读初重 → 振动 → 达目标停振动
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(10, total, "读取天平初始重量")
-        ok, detail = balance_read_weight(ctx.balance_ctx)
-        if not ok:
-            return _fail_dose(detail)
-        w0 = ctx.balance_ctx.balance.last_weight_value
-        if w0 is None:
-            return _fail_dose("天平未返回有效重量值。")
-        target_w = w0 + dose_weight
-        _log_dose(
-            f"加样称重：物料={material_id}，工位={station}，"
-            f"初重={w0:g} g，目标净重={dose_weight:g} g，目标总重={target_w:g} g"
-        )
-        ctx.system.set_progress(
-            10, total, f"振动加样中（目标 {target_w:g} g）"
-        )
-        ok, detail = motion.motion_do_set(ctx.motion_ctx, "vibration", True)
-        if not ok:
-            return _fail_dose(detail)
-
-        deadline = time.monotonic() + DOSE_WEIGHT_TIMEOUT_S
-        reached = False
-        while time.monotonic() < deadline:
             if _aborted(ctx):
-                motion.motion_do_set(ctx.motion_ctx, "vibration", False)
-                w_final = ctx.balance_ctx.balance.last_weight_value
-                return _fail_dose("加样已停止。")
-            ok, detail = balance_read_weight(ctx.balance_ctx)
+                return _fail_dose("加料已停止。")
+            _step(f"{prefix} 分度盘 → 工位 {station}")
+            ok, detail = disc.go_to_station(station, indexing_vel)
+            ctx.motion_ctx.motion.set_indexing_station(disc.current_station)
             if not ok:
-                motion.motion_do_set(ctx.motion_ctx, "vibration", False)
                 return _fail_dose(detail)
-            current = ctx.balance_ctx.balance.last_weight_value
-            if current is None:
-                motion.motion_do_set(ctx.motion_ctx, "vibration", False)
-                return _fail_dose("天平未返回有效重量值。")
-            w_final = current
-            ctx.system.progress_detail = (
-                f"振动加样中（当前 {current:g} / 目标 {target_w:g} g）"
+
+            if _aborted(ctx):
+                return _fail_dose("加料已停止。")
+            _step(f"{prefix} 振动启动")
+            ok, detail = motion.motion_do_set(ctx.motion_ctx, "vibration", True)
+            if not ok:
+                return _fail_dose(detail)
+
+            if _aborted(ctx):
+                return _fail_dose("加料已停止。")
+            _step(f"{prefix} 搅拌启动")
+            ok, detail = motion.motion_axis_move_abs(ctx.motion_ctx, _STIR_AXIS_KEY)
+            if not ok:
+                return _fail_dose(detail)
+
+            if _aborted(ctx):
+                return _fail_dose("加料已停止。")
+            _step(f"{prefix} 升降电机 → 工作位置")
+            ok, detail = motion.motion_lift_go_named(ctx.motion_ctx, "work")
+            if not ok:
+                return _fail_dose(detail)
+
+            if _aborted(ctx):
+                return _fail_dose("加料已停止。")
+            _step(
+                f"{prefix} 加料中（{weight_mg:g} mg，延时 {DOSE_WORK_DURATION_S:g}s）"
             )
-            if current >= target_w:
-                reached = True
-                break
-            time.sleep(DOSE_WEIGHT_POLL_S)
-
-        motion.motion_do_set(ctx.motion_ctx, "vibration", False)
-        if not reached:
-            return _fail_dose(
-                f"加样超时（{DOSE_WEIGHT_TIMEOUT_S:.0f}s），未达到目标重量。"
+            err = _sleep_interruptible(
+                DOSE_WORK_DURATION_S,
+                f"{prefix} 加料中",
             )
+            if err:
+                return _fail_dose(err)
 
-        actual_net = (w_final - w0) if (w_final is not None and w0 is not None) else None
-        _log_dose(
-            f"加样称重完成：物料={material_id}，工位={station}，"
-            f"初重={w0:g} g，终重={w_final:g} g，"
-            f"实际净增={actual_net:g} g，目标净重={dose_weight:g} g"
-        )
+            if _aborted(ctx):
+                return _fail_dose("加料已停止。")
+            _step(f"{prefix} 振动停止")
+            ok, detail = motion.motion_do_set(ctx.motion_ctx, "vibration", False)
+            if not ok:
+                return _fail_dose(detail)
 
-        # 11 系统回原点（独立流程）
-        if _aborted(ctx):
-            return _fail_dose("加样已停止。")
-        ctx.system.set_progress(11, total, "系统回原点")
-        ctx.system.run_state = SystemRunState.IDLE
-        ctx.system.abort_requested = False
-        _sync_busy_flag(ctx)
-        ok, detail = system_run_go_origin(ctx)
-        if not ok:
-            msg = f"加样后回原点失败: {detail}"
+            if _aborted(ctx):
+                return _fail_dose("加料已停止。")
+            _step(f"{prefix} 搅拌停止")
+            ok, detail = motion.motion_axis_stop(ctx.motion_ctx, _STIR_AXIS_KEY)
+            if not ok:
+                return _fail_dose(detail)
+
+            if _aborted(ctx):
+                return _fail_dose("加料已停止。")
+            _step(f"{prefix} 升降电机 → 原点位置")
+            ok, detail = motion.motion_lift_go_named(ctx.motion_ctx, "origin")
+            if not ok:
+                return _fail_dose(detail)
+
             _log_dose(
-                f"加样部分成功但回原点失败：物料={material_id}，工位={station}，"
-                f"初重={w0:g} g，终重={w_final:g} g，实际净增={actual_net:g} g，"
-                f"目标净重={dose_weight:g} g，原因={detail}"
+                f"加料单料完成：物料={material_id}，工位={station}，"
+                f"目标重量={weight_mg:g} mg"
             )
-            return _fail(ctx, action, msg)
+
+        if _aborted(ctx):
+            return _fail_dose("加料已停止。")
+        _step("水平电机 → 原点位置")
+        ok, detail = motion.motion_horizontal_go_named(ctx.motion_ctx, "origin")
+        if not ok:
+            return _fail_dose(detail)
+
         done_msg = (
-            f"加样完成（物料 {material_id}，工位 {station}，"
-            f"目标净重 {dose_weight:g} g，实际净增 {actual_net:g} g）。{detail}"
+            f"加料完成（{job_desc}，工作延时 {DOSE_WORK_DURATION_S:g}s）。"
         )
-        _log_dose(
-            f"加样成功：物料={material_id}，工位={station}，"
-            f"初重={w0:g} g，终重={w_final:g} g，"
-            f"实际净增={actual_net:g} g，目标净重={dose_weight:g} g"
-        )
-        return _ok(ctx, action, done_msg)
+        _log_dose(f"加料成功：{job_desc}")
+        return _finish(ctx, True, action, done_msg)
     except Exception as exc:  # noqa: BLE001
-        return _fail_dose(f"加样异常: {exc}")
+        return _fail_dose(f"加料异常: {exc}")

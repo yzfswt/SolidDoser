@@ -277,3 +277,6 @@ def apply_status_to_state(state, status: MotionDeviceStatus) -> None:
         state.do_states[do_item.key] = status.do_on(do_item.key)
     for di_item in cfg.DI_INPUTS:
         state.di_states[di_item.key] = status.di_on(di_item.key)
+    from Drivers.SolidDoserMotion.motion_safety import update_indexing_rotation_allowed
+
+    update_indexing_rotation_allowed(state)
