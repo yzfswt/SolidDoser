@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtCore import QModelIndex, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -11,8 +11,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -41,6 +44,12 @@ _AUTO_BTN_MIN_WIDTH = 96
 _AUTO_BTN_SPACING = 4
 # 物料表条码行 / 加料清单表行统一行高
 _LIST_ROW_HEIGHT = 30
+# 加料清单可视行数（不含表头）；内容区高度与左侧 4 行工位对齐
+_DOSE_VISIBLE_ROWS = 4
+_DOSE_WEIGHT_COL_WIDTH = 120
+_MID_BODY_HEIGHT = _LIST_ROW_HEIGHT * 4 + 6 * 3
+# 加料清单表格高度（约为左侧工位区的两倍）
+_DOSE_TABLE_HEIGHT = _MID_BODY_HEIGHT * 2
 
 _STYLESHEET = """
 SolidDoserAutoTabWidget {
@@ -115,6 +124,16 @@ QTableWidget {
 QTableWidget::item {
     padding: 0px 6px;
 }
+/* 单元格编辑器：贴合行高，避免继承全局 QLineEdit 的 30px 撑破表格行 */
+QTableWidget QLineEdit {
+    min-height: 0px;
+    max-height: 28px;
+    padding: 0px 4px;
+    margin: 0px;
+    border: 1px solid #3b82f6;
+    border-radius: 2px;
+    background: #ffffff;
+}
 QHeaderView::section {
     font-size: 12px;
     font-weight: 600;
@@ -163,6 +182,28 @@ QPushButton#DangerBtn:disabled {
     border-color: #fecdd3;
 }
 """
+
+
+class _CompactCellDelegate(QStyledItemDelegate):
+    """加料清单单元格编辑器：几何贴合单元格，避免输入框高出一行。"""
+
+    def createEditor(
+        self,
+        parent: QWidget,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> QWidget:
+        editor = QLineEdit(parent)
+        editor.setFrame(False)
+        return editor
+
+    def updateEditorGeometry(
+        self,
+        editor: QWidget,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        editor.setGeometry(option.rect)
 
 
 class _SystemActionThread(QThread):
@@ -281,8 +322,16 @@ class SolidDoserAutoTabWidget(QWidget):
             cell_layout.addWidget(code, 1)
             grid.addWidget(cell, row, col)
             self._material_code_labels[station] = code
-        materials_layout.addLayout(grid)
-        materials_layout.addStretch(1)
+
+        # 与右侧加料表同高的内容区（按 4 行工位高度，避免整窗拉得过高）
+        materials_body = QWidget()
+        materials_body.setFixedHeight(_MID_BODY_HEIGHT)
+        materials_body_layout = QVBoxLayout(materials_body)
+        materials_body_layout.setContentsMargins(0, 0, 0, 0)
+        materials_body_layout.setSpacing(0)
+        materials_body_layout.addLayout(grid)
+        materials_body_layout.addStretch(1)
+        materials_layout.addWidget(materials_body)
 
         dose_card = QFrame()
         dose_card.setObjectName("Card")
@@ -290,43 +339,57 @@ class SolidDoserAutoTabWidget(QWidget):
         dose_layout.setContentsMargins(12, 12, 12, 12)
         dose_layout.setSpacing(8)
 
-        dose_head = QHBoxLayout()
         dose_title = QLabel("加料清单（重量单位 mg）")
         dose_title.setObjectName("Title")
-        dose_head.addWidget(dose_title)
-        dose_head.addStretch(1)
-        self._dose_add_btn = QPushButton("添加")
-        self._dose_add_btn.setMinimumWidth(72)
-        self._dose_add_btn.clicked.connect(self._on_dose_add_row)
-        self._dose_del_btn = QPushButton("删除")
-        self._dose_del_btn.setMinimumWidth(72)
-        self._dose_del_btn.clicked.connect(self._on_dose_del_row)
-        dose_head.addWidget(self._dose_add_btn)
-        dose_head.addWidget(self._dose_del_btn)
-        dose_layout.addLayout(dose_head)
+        dose_layout.addWidget(dose_title)
 
         self._dose_table = QTableWidget(0, 2)
         self._dose_table.setHorizontalHeaderLabels(["物料条码", "重量(mg)"])
         self._dose_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self._dose_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeToContents
-        )
+        self._dose_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self._dose_table.setColumnWidth(1, _DOSE_WEIGHT_COL_WIDTH)
         self._dose_table.horizontalHeader().setFixedHeight(_LIST_ROW_HEIGHT)
         self._dose_table.verticalHeader().setVisible(False)
         self._dose_table.verticalHeader().setDefaultSectionSize(_LIST_ROW_HEIGHT)
         self._dose_table.verticalHeader().setMinimumSectionSize(_LIST_ROW_HEIGHT)
         self._dose_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._dose_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self._dose_table.setMinimumHeight(140)
-        dose_layout.addWidget(self._dose_table, 1)
+        self._dose_table.setItemDelegate(_CompactCellDelegate(self._dose_table))
+        self._dose_table.setFixedHeight(_DOSE_TABLE_HEIGHT)
+        self._dose_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        self._dose_add_btn = QPushButton("添加")
+        self._dose_add_btn.setMinimumWidth(72)
+        self._dose_add_btn.clicked.connect(self._on_dose_add_row)
+        self._dose_del_btn = QPushButton("删除")
+        self._dose_del_btn.setMinimumWidth(72)
+        self._dose_del_btn.clicked.connect(self._on_dose_del_row)
+
+        dose_btns = QVBoxLayout()
+        dose_btns.setContentsMargins(0, 0, 0, 0)
+        dose_btns.setSpacing(8)
+        dose_btns.setAlignment(Qt.AlignTop)
+        dose_btns.addWidget(self._dose_add_btn)
+        dose_btns.addWidget(self._dose_del_btn)
+        dose_btns.addStretch(1)
+
+        dose_body = QHBoxLayout()
+        dose_body.setContentsMargins(0, 0, 0, 0)
+        dose_body.setSpacing(8)
+        dose_body.addWidget(self._dose_table, 1)
+        dose_body.addLayout(dose_btns)
+        dose_layout.addLayout(dose_body)
         self._append_dose_row("", "")
 
         mid_row = QHBoxLayout()
         mid_row.setContentsMargins(0, 0, 0, 0)
         mid_row.setSpacing(8)
-        mid_row.addWidget(materials_card, 1)
-        mid_row.addWidget(dose_card, 1)
-        root.addLayout(mid_row, 1)
+        mid_row.setAlignment(Qt.AlignTop)
+        materials_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        dose_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        mid_row.addWidget(materials_card, 1, Qt.AlignTop)
+        mid_row.addWidget(dose_card, 1, Qt.AlignTop)
+        root.addLayout(mid_row)
 
         card = QFrame()
         card.setObjectName("Card")
